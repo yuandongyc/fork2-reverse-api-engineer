@@ -761,6 +761,244 @@ class TestOpenCodeAutoEngineerAnalyze:
             assert result is None
 
     @pytest.mark.asyncio
+    async def test_event_timeout(self, tmp_path):
+        """Event stream timeout sets last error and returns None."""
+        eng = self._make_engineer(tmp_path)
+
+        mock_health = MagicMock()
+        mock_health.json.return_value = {"status": "ok"}
+        mock_health.raise_for_status = MagicMock()
+
+        mock_session = MagicMock()
+        mock_session.json.return_value = {"id": "sess_timeout"}
+        mock_session.raise_for_status = MagicMock()
+
+        mock_mcp = MagicMock()
+        mock_mcp.raise_for_status = MagicMock()
+
+        mock_prompt = MagicMock()
+        mock_prompt.raise_for_status = MagicMock()
+
+        async def mock_get(path, **kwargs):
+            if path == "/global/health":
+                return mock_health
+            return MagicMock(status_code=200, json=MagicMock(return_value=[]))
+
+        async def mock_post(path, **kwargs):
+            if path == "/session":
+                return mock_session
+            if path == "/mcp":
+                return mock_mcp
+            return mock_prompt
+
+        mock_stream_resp = AsyncMock()
+
+        async def mock_aiter_lines():
+            # Never yield session.idle - simulates hanging
+            await asyncio.sleep(100)
+            yield "never reached"
+
+        mock_stream_resp.aiter_lines = mock_aiter_lines
+        mock_stream_cm = AsyncMock()
+        mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_stream_resp)
+        mock_stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+        mock_client = AsyncMock()
+        mock_client.get = mock_get
+        mock_client.post = mock_post
+        mock_client.stream = MagicMock(return_value=mock_stream_cm)
+        mock_client.delete = AsyncMock()
+
+        with patch("reverse_api.auto_engineer.httpx.AsyncClient") as mock_async:
+            mock_async.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_async.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            # Patch asyncio.wait_for to raise TimeoutError immediately
+            async def mock_wait_for(coro, timeout=None):
+                coro.close()  # Clean up the coroutine
+                raise TimeoutError()
+
+            with patch("reverse_api.auto_engineer.asyncio.wait_for", side_effect=mock_wait_for):
+                result = await eng.analyze_and_generate()
+                assert result is None
+
+    @pytest.mark.asyncio
+    async def test_mcp_deregistration_exception(self, tmp_path):
+        """MCP deregistration exception is silently ignored."""
+        eng = self._make_engineer(tmp_path)
+
+        mock_health = MagicMock()
+        mock_health.json.return_value = {"status": "ok"}
+        mock_health.raise_for_status = MagicMock()
+
+        mock_session = MagicMock()
+        mock_session.json.return_value = {"id": "sess_dereg"}
+        mock_session.raise_for_status = MagicMock()
+
+        mock_mcp = MagicMock()
+        mock_mcp.raise_for_status = MagicMock()
+
+        mock_prompt = MagicMock()
+        mock_prompt.raise_for_status = MagicMock()
+
+        mock_messages = MagicMock()
+        mock_messages.status_code = 200
+        mock_messages.json.return_value = [
+            {"info": {"role": "assistant", "providerID": "anthropic", "modelID": "claude-sonnet-4-5"}, "parts": []}
+        ]
+
+        async def mock_get(path, **kwargs):
+            if path == "/global/health":
+                return mock_health
+            if "/message" in path:
+                return mock_messages
+            return MagicMock()
+
+        async def mock_post(path, **kwargs):
+            if path == "/session":
+                return mock_session
+            if path == "/mcp":
+                return mock_mcp
+            return mock_prompt
+
+        mock_stream_resp = AsyncMock()
+
+        async def mock_aiter_lines():
+            yield 'data: {"type":"session.idle","properties":{"sessionID":"sess_dereg"}}'
+
+        mock_stream_resp.aiter_lines = mock_aiter_lines
+        mock_stream_cm = AsyncMock()
+        mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_stream_resp)
+        mock_stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+        mock_client = AsyncMock()
+        mock_client.get = mock_get
+        mock_client.post = mock_post
+        mock_client.stream = MagicMock(return_value=mock_stream_cm)
+        mock_client.delete = AsyncMock(side_effect=Exception("deregister failed"))
+
+        with patch("reverse_api.auto_engineer.httpx.AsyncClient") as mock_async:
+            mock_async.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_async.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await eng.analyze_and_generate()
+            # Should succeed despite deregistration failure
+            assert result is not None
+            assert "script_path" in result
+
+    @pytest.mark.asyncio
+    async def test_message_fetch_exception(self, tmp_path):
+        """Message fetch exception is silently handled."""
+        eng = self._make_engineer(tmp_path)
+
+        mock_health = MagicMock()
+        mock_health.json.return_value = {"status": "ok"}
+        mock_health.raise_for_status = MagicMock()
+
+        mock_session = MagicMock()
+        mock_session.json.return_value = {"id": "sess_msgfail"}
+        mock_session.raise_for_status = MagicMock()
+
+        mock_mcp = MagicMock()
+        mock_mcp.raise_for_status = MagicMock()
+
+        mock_prompt = MagicMock()
+        mock_prompt.raise_for_status = MagicMock()
+
+        async def mock_get(path, **kwargs):
+            if path == "/global/health":
+                return mock_health
+            return MagicMock()
+
+        async def mock_post(path, **kwargs):
+            if path == "/session":
+                return mock_session
+            if path == "/mcp":
+                return mock_mcp
+            return mock_prompt
+
+        mock_stream_resp = AsyncMock()
+
+        async def mock_aiter_lines():
+            yield 'data: {"type":"session.idle","properties":{"sessionID":"sess_msgfail"}}'
+
+        mock_stream_resp.aiter_lines = mock_aiter_lines
+        mock_stream_cm = AsyncMock()
+        mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_stream_resp)
+        mock_stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+        mock_client = AsyncMock()
+        mock_client.get = mock_get
+        mock_client.post = mock_post
+        mock_client.stream = MagicMock(return_value=mock_stream_cm)
+        mock_client.delete = AsyncMock()
+
+        # Patch the second httpx.AsyncClient (for message fetch) to fail
+        original_async_client = httpx.AsyncClient
+
+        call_count = [0]
+
+        with patch("reverse_api.auto_engineer.httpx.AsyncClient") as mock_async:
+            def side_effect(*args, **kwargs):
+                call_count[0] += 1
+                if call_count[0] == 1:
+                    # First call - the main client
+                    cm = MagicMock()
+                    cm.__aenter__ = AsyncMock(return_value=mock_client)
+                    cm.__aexit__ = AsyncMock(return_value=False)
+                    return cm
+                else:
+                    # Second call - message fetch client
+                    cm = MagicMock()
+                    cm.__aenter__ = AsyncMock(side_effect=Exception("fetch failed"))
+                    cm.__aexit__ = AsyncMock(return_value=False)
+                    return cm
+
+            mock_async.side_effect = side_effect
+
+            result = await eng.analyze_and_generate()
+            # Should still succeed despite message fetch failure
+            assert result is not None
+            assert "script_path" in result
+
+    @pytest.mark.asyncio
+    async def test_finally_cleanup_with_mcp_name(self, tmp_path):
+        """Finally block cleans up MCP server even on exception."""
+        eng = self._make_engineer(tmp_path)
+        eng.mcp_name = "playwright-test_sess"
+
+        # Trigger exception to go through finally block
+        with patch("reverse_api.auto_engineer.httpx.AsyncClient") as mock_async:
+            mock_async.return_value.__aenter__ = AsyncMock(
+                side_effect=RuntimeError("test error")
+            )
+            mock_async.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await eng.analyze_and_generate()
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_health_check_non_401_reraise(self, tmp_path):
+        """Non-401 HTTPStatusError in health check is re-raised (line 414)."""
+        eng = self._make_engineer(tmp_path)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 503
+        mock_response.text = "Service Unavailable"
+        error = httpx.HTTPStatusError("503", request=MagicMock(), response=mock_response)
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=error)
+
+        with patch("reverse_api.auto_engineer.httpx.AsyncClient") as mock_async:
+            mock_async.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_async.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await eng.analyze_and_generate()
+            # Non-401 is re-raised and caught by outer HTTPStatusError handler
+            assert result is None
+
+    @pytest.mark.asyncio
     async def test_mcp_registration_failure(self, tmp_path):
         """MCP server registration failure returns None."""
         eng = self._make_engineer(tmp_path)
@@ -772,8 +1010,6 @@ class TestOpenCodeAutoEngineerAnalyze:
         mock_session = MagicMock()
         mock_session.json.return_value = {"id": "sess_123"}
         mock_session.raise_for_status = MagicMock()
-
-        call_count = [0]
 
         async def mock_get(path, **kwargs):
             if path == "/global/health":

@@ -877,6 +877,70 @@ class TestOpenCodeEngineerStreamEvents:
         await eng._stream_events(mock_client)
 
     @pytest.mark.asyncio
+    async def test_buffer_size_json_error_with_keyword(self, tmp_path):
+        """Buffer size error detected in JSONDecodeError message triggers special handling."""
+        eng = self._make_engineer(tmp_path)
+
+        # Patch json.loads to raise JSONDecodeError with buffer size in message
+        original_loads = json.loads
+
+        def mock_loads(s, *args, **kwargs):
+            raise json.JSONDecodeError("exceeded maximum buffer size 1048576", s, 0)
+
+        lines = [
+            'data: {"some":"data"}',
+        ]
+
+        mock_response = AsyncMock()
+
+        async def mock_aiter_lines():
+            for line in lines:
+                yield line
+
+        mock_response.aiter_lines = mock_aiter_lines
+
+        cm = AsyncMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_response)
+        cm.__aexit__ = AsyncMock(return_value=False)
+
+        mock_client = AsyncMock()
+        mock_client.stream = MagicMock(return_value=cm)
+
+        with patch("reverse_api.opencode_engineer.json.loads", side_effect=mock_loads):
+            await eng._stream_events(mock_client)
+            assert eng._last_error is not None
+            assert "Screenshot too large" in eng._last_error
+
+    @pytest.mark.asyncio
+    async def test_message_part_updated_event(self, tmp_path):
+        """message.part.updated event calls _handle_part_update."""
+        eng = self._make_engineer(tmp_path)
+
+        lines = [
+            'data: {"type":"message.part.updated","properties":{"sessionID":"session_abc","part":{"type":"text","text":"thinking..."}}}',
+            'data: {"type":"session.idle","properties":{"sessionID":"session_abc"}}',
+        ]
+
+        mock_response = AsyncMock()
+
+        async def mock_aiter_lines():
+            for line in lines:
+                yield line
+
+        mock_response.aiter_lines = mock_aiter_lines
+
+        cm = AsyncMock()
+        cm.__aenter__ = AsyncMock(return_value=mock_response)
+        cm.__aexit__ = AsyncMock(return_value=False)
+
+        mock_client = AsyncMock()
+        mock_client.stream = MagicMock(return_value=cm)
+
+        with patch.object(eng, "_handle_part_update", new_callable=AsyncMock) as mock_handle:
+            await eng._stream_events(mock_client)
+            mock_handle.assert_called_once()
+
+    @pytest.mark.asyncio
     async def test_empty_and_non_data_lines_skipped(self, tmp_path):
         """Empty lines and non-data lines are skipped."""
         eng = self._make_engineer(tmp_path)
@@ -1226,6 +1290,109 @@ class TestOpenCodeEngineerAnalyzeAndGenerate:
             mock_async.return_value.__aexit__ = AsyncMock(return_value=False)
 
             result = await eng.analyze_and_generate()
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_success_message_fetch_exception(self, tmp_path):
+        """Success flow handles exception when fetching session messages."""
+        eng = self._make_engineer(tmp_path)
+
+        health_response = MagicMock()
+        health_response.status_code = 200
+        health_response.json.return_value = {"status": "ok"}
+        health_response.raise_for_status = MagicMock()
+
+        session_response = MagicMock()
+        session_response.json.return_value = {"id": "sess_msgfail"}
+        session_response.raise_for_status = MagicMock()
+
+        prompt_response = MagicMock()
+        prompt_response.raise_for_status = MagicMock()
+
+        get_count = [0]
+
+        async def mock_get(path, **kwargs):
+            get_count[0] += 1
+            if path == "/global/health":
+                return health_response
+            if "/message" in path:
+                raise Exception("message fetch failed")
+            return MagicMock()
+
+        async def mock_post(path, **kwargs):
+            if path == "/session":
+                return session_response
+            return prompt_response
+
+        mock_stream_resp = AsyncMock()
+
+        async def mock_aiter_lines():
+            yield 'data: {"type":"session.idle","properties":{"sessionID":"sess_msgfail"}}'
+
+        mock_stream_resp.aiter_lines = mock_aiter_lines
+        mock_stream_cm = AsyncMock()
+        mock_stream_cm.__aenter__ = AsyncMock(return_value=mock_stream_resp)
+        mock_stream_cm.__aexit__ = AsyncMock(return_value=False)
+
+        mock_client = AsyncMock()
+        mock_client.get = mock_get
+        mock_client.post = mock_post
+        mock_client.stream = MagicMock(return_value=mock_stream_cm)
+
+        with patch("reverse_api.opencode_engineer.httpx.AsyncClient") as mock_async:
+            mock_async.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_async.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await eng.analyze_and_generate()
+            # Should still succeed even if message fetch fails
+            assert result is not None
+            assert "script_path" in result
+
+    @pytest.mark.asyncio
+    async def test_health_401_with_custom_username_outer(self, tmp_path):
+        """401 in session creation with custom username shows username (line 255)."""
+        eng = self._make_engineer(tmp_path)
+        eng.opencode_username = "admin"
+
+        health_response = MagicMock()
+        health_response.status_code = 200
+        health_response.json.return_value = {"status": "ok"}
+        health_response.raise_for_status = MagicMock()
+
+        mock_response = MagicMock()
+        mock_response.status_code = 401
+        session_error = httpx.HTTPStatusError("401", request=MagicMock(), response=mock_response)
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(return_value=health_response)
+        mock_client.post = AsyncMock(side_effect=session_error)
+
+        with patch("reverse_api.opencode_engineer.httpx.AsyncClient") as mock_async:
+            mock_async.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_async.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await eng.analyze_and_generate()
+            assert result is None
+
+    @pytest.mark.asyncio
+    async def test_health_non_401_raises(self, tmp_path):
+        """Non-401 HTTPStatusError in health check re-raises (line 160)."""
+        eng = self._make_engineer(tmp_path)
+
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_response.text = "Server Error"
+        error = httpx.HTTPStatusError("500", request=MagicMock(), response=mock_response)
+
+        mock_client = AsyncMock()
+        mock_client.get = AsyncMock(side_effect=error)
+
+        with patch("reverse_api.opencode_engineer.httpx.AsyncClient") as mock_async:
+            mock_async.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+            mock_async.return_value.__aexit__ = AsyncMock(return_value=False)
+
+            result = await eng.analyze_and_generate()
+            # 500 should be caught by outer HTTPStatusError handler
             assert result is None
 
     @pytest.mark.asyncio
