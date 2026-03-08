@@ -15,10 +15,7 @@ from claude_agent_sdk import (
     ToolUseBlock,
 )
 
-import questionary
-
 from .base_engineer import BaseEngineer
-from .tui import THEME_PRIMARY, THEME_SECONDARY
 
 # Suppress claude_agent_sdk logs
 logging.getLogger("claude_agent_sdk").setLevel(logging.WARNING)
@@ -35,107 +32,7 @@ class ClaudeEngineer(BaseEngineer):
             return {"behavior": "allow", "updatedInput": input_params}
 
         questions = input_params.get("questions", [])
-        answers = {}
-
-        # Display header
-        self.ui.console.print()
-        self.ui.console.print(f"  [{THEME_PRIMARY}]?[/{THEME_PRIMARY}] [bold white]Agent Question[/bold white]")
-        self.ui.console.print()
-
-        for q in questions:
-            question_text = q.get("question", "")
-            header = q.get("header", "")
-            options = q.get("options", [])
-            multi_select = q.get("multiSelect", False)
-
-            if not question_text:
-                continue
-
-            # Show context if header exists
-            if header:
-                self.ui.console.print(f"  [dim]{header}[/dim]")
-
-            try:
-                if multi_select:
-                    # Multi-select question
-                    choices = [
-                        f"{opt.get('label', '')} - {opt.get('description', '')}" if opt.get("description") else opt.get("label", "")
-                        for opt in options
-                    ]
-                    if choices:
-                        selected = await questionary.checkbox(
-                            f" > {question_text}",
-                            choices=choices,
-                            qmark="",
-                            style=questionary.Style(
-                                [
-                                    ("pointer", f"fg:{THEME_PRIMARY} bold"),
-                                    ("highlighted", f"fg:{THEME_PRIMARY} bold"),
-                                    ("selected", f"fg:{THEME_PRIMARY}"),
-                                ]
-                            ),
-                        ).ask_async()
-
-                        if selected is None:
-                            raise KeyboardInterrupt
-
-                        # Extract just the labels (before the " - " separator)
-                        labels = [s.split(" - ")[0] if " - " in s else s for s in selected]
-                        answers[question_text] = ", ".join(labels)
-                    else:
-                        # Text input fallback
-                        answer = await questionary.text(
-                            f" > {question_text}",
-                            qmark="",
-                            style=questionary.Style([("question", f"fg:{THEME_SECONDARY}")]),
-                        ).ask_async()
-                        if answer is None:
-                            raise KeyboardInterrupt
-                        answers[question_text] = answer.strip()
-
-                else:
-                    # Single select question
-                    choices = [
-                        f"{opt.get('label', '')} - {opt.get('description', '')}" if opt.get("description") else opt.get("label", "")
-                        for opt in options
-                    ]
-                    if choices:
-                        answer = await questionary.select(
-                            f" > {question_text}",
-                            choices=choices,
-                            qmark="",
-                            style=questionary.Style(
-                                [
-                                    ("pointer", f"fg:{THEME_PRIMARY} bold"),
-                                    ("highlighted", f"fg:{THEME_PRIMARY} bold"),
-                                ]
-                            ),
-                        ).ask_async()
-
-                        if answer is None:
-                            raise KeyboardInterrupt
-
-                        # Extract just the label (before the " - " separator)
-                        label = answer.split(" - ")[0] if " - " in answer else answer
-                        answers[question_text] = label
-                    else:
-                        # Text input fallback
-                        answer = await questionary.text(
-                            f" > {question_text}",
-                            qmark="",
-                            style=questionary.Style([("question", f"fg:{THEME_SECONDARY}")]),
-                        ).ask_async()
-                        if answer is None:
-                            raise KeyboardInterrupt
-                        answers[question_text] = answer.strip()
-
-                self.ui.console.print(f"  [dim]→ {answers[question_text]}[/dim]")
-
-            except KeyboardInterrupt:
-                self.ui.console.print(f"  [dim]User cancelled question[/dim]")
-                answers[question_text] = ""
-
-        self.ui.console.print()
+        answers = await self._ask_user_interactive(questions)
 
         return {
             "behavior": "allow",

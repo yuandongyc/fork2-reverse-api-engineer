@@ -3,10 +3,10 @@
 import asyncio
 from typing import Any
 
-import questionary
-
 from .base_engineer import BaseEngineer
-from .tui import THEME_PRIMARY, THEME_SECONDARY
+
+# Timeout for waiting on Copilot session completion (10 minutes)
+_SESSION_TIMEOUT = 600
 
 
 class CopilotEngineer(BaseEngineer):
@@ -45,93 +45,14 @@ class CopilotEngineer(BaseEngineer):
         class AskUserParams(BaseModel):
             questions: list[Question] = Field(description="Questions to ask the user")
 
-        ui = self.ui
+        # Capture self for use in the tool handler
+        engineer = self
 
         @define_tool(description="Ask the user a clarifying question. Use when you need user input to proceed.")  # type: ignore[misc]
         async def ask_user_question(params: AskUserParams) -> str:
-            answers: dict[str, str] = {}
-
-            ui.console.print()
-            ui.console.print(f"  [{THEME_PRIMARY}]?[/{THEME_PRIMARY}] [bold white]Agent Question[/bold white]")
-            ui.console.print()
-
-            for q in params.questions:
-                if not q.question:
-                    continue
-
-                if q.header:
-                    ui.console.print(f"  [dim]{q.header}[/dim]")
-
-                try:
-                    if q.multiSelect:
-                        choices = [f"{opt.label} - {opt.description}" if opt.description else opt.label for opt in q.options]
-                        if choices:
-                            selected = await questionary.checkbox(
-                                f" > {q.question}",
-                                choices=choices,
-                                qmark="",
-                                style=questionary.Style(
-                                    [
-                                        ("pointer", f"fg:{THEME_PRIMARY} bold"),
-                                        ("highlighted", f"fg:{THEME_PRIMARY} bold"),
-                                        ("selected", f"fg:{THEME_PRIMARY}"),
-                                    ]
-                                ),
-                            ).ask_async()
-
-                            if selected is None:
-                                raise KeyboardInterrupt
-
-                            labels = [s.split(" - ")[0] if " - " in s else s for s in selected]
-                            answers[q.question] = ", ".join(labels)
-                        else:
-                            answer = await questionary.text(
-                                f" > {q.question}",
-                                qmark="",
-                                style=questionary.Style([("question", f"fg:{THEME_SECONDARY}")]),
-                            ).ask_async()
-                            if answer is None:
-                                raise KeyboardInterrupt
-                            answers[q.question] = answer.strip()
-                    else:
-                        choices = [f"{opt.label} - {opt.description}" if opt.description else opt.label for opt in q.options]
-                        if choices:
-                            answer = await questionary.select(
-                                f" > {q.question}",
-                                choices=choices,
-                                qmark="",
-                                style=questionary.Style(
-                                    [
-                                        ("pointer", f"fg:{THEME_PRIMARY} bold"),
-                                        ("highlighted", f"fg:{THEME_PRIMARY} bold"),
-                                    ]
-                                ),
-                            ).ask_async()
-
-                            if answer is None:
-                                raise KeyboardInterrupt
-
-                            label = answer.split(" - ")[0] if " - " in answer else answer
-                            answers[q.question] = label
-                        else:
-                            answer = await questionary.text(
-                                f" > {q.question}",
-                                qmark="",
-                                style=questionary.Style([("question", f"fg:{THEME_SECONDARY}")]),
-                            ).ask_async()
-                            if answer is None:
-                                raise KeyboardInterrupt
-                            answers[q.question] = answer.strip()
-
-                    ui.console.print(f"  [dim]→ {answers[q.question]}[/dim]")
-
-                except KeyboardInterrupt:
-                    ui.console.print("  [dim]User cancelled question[/dim]")
-                    answers[q.question] = ""
-
-            ui.console.print()
-
-            # Return answers as formatted string
+            # Convert pydantic models to dicts for the shared method
+            question_dicts = [q.model_dump() for q in params.questions]
+            answers = await engineer._ask_user_interactive(question_dicts)
             return "\n".join(f"{k}: {v}" for k, v in answers.items())
 
         return ask_user_question
@@ -181,6 +102,7 @@ class CopilotEngineer(BaseEngineer):
             elif event_type == "session.compaction_complete":
                 self.ui.console.print("  [dim]session compaction complete[/dim]")
 
+        client = None
         try:
             ask_user_tool = self._build_ask_user_tool()
 
@@ -205,8 +127,13 @@ class CopilotEngineer(BaseEngineer):
 
             await session.send({"prompt": prompt})
 
-            # Wait for session to complete
-            await done_event.wait()
+            # Wait for session to complete with timeout protection
+            try:
+                await asyncio.wait_for(done_event.wait(), timeout=_SESSION_TIMEOUT)
+            except TimeoutError:
+                self.ui.error(f"Session timed out after {_SESSION_TIMEOUT // 60} minutes")
+                self.message_store.save_error("Session timed out")
+                return None
 
             # Save accumulated thinking text
             if accumulated_text:
@@ -217,7 +144,7 @@ class CopilotEngineer(BaseEngineer):
             local_path = str(self.local_scripts_dir / self._get_client_filename()) if self.local_scripts_dir else None
             self.ui.success(script_path, local_path)
 
-            # GitHub subscription: cost is 0 (included in Copilot subscription)
+            # GitHub subscription: cost is $0 (included in Copilot subscription)
             self.usage_metadata["estimated_cost_usd"] = 0.0
 
             # Display usage if available
@@ -243,3 +170,11 @@ class CopilotEngineer(BaseEngineer):
             self.message_store.save_error(str(e))
             self.ui.console.print("\n[dim]Make sure GitHub Copilot CLI is installed and you are logged in: gh auth login[/dim]")
             return None
+
+        finally:
+            # Always stop the client to avoid resource leaks
+            if client is not None:
+                try:
+                    await client.stop()
+                except Exception:
+                    pass

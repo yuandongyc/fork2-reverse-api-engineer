@@ -652,6 +652,7 @@ class CopilotAutoEngineer:
             elif event_type == "session.idle":
                 done_event.set()
 
+        client = None
         try:
             client = CopilotClient(
                 {
@@ -683,7 +684,14 @@ class CopilotAutoEngineer:
 
             session.on(on_event)
             await session.send({"prompt": auto_prompt})
-            await done_event.wait()
+
+            # Wait with timeout protection (10 minutes)
+            try:
+                await asyncio.wait_for(done_event.wait(), timeout=600)
+            except TimeoutError:
+                eng.ui.error("Session timed out (10 min)")
+                eng.message_store.save_error("Session timed out")
+                return None
 
             if accumulated_text:
                 eng.message_store.save_thinking("".join(accumulated_text))
@@ -711,3 +719,11 @@ class CopilotAutoEngineer:
             else:
                 eng.ui.console.print("\n[dim]Make sure GitHub Copilot CLI is installed and you are logged in: gh auth login[/dim]")
             return None
+
+        finally:
+            # Always stop the client to avoid resource leaks
+            if client is not None:
+                try:
+                    await client.stop()
+                except Exception:
+                    pass

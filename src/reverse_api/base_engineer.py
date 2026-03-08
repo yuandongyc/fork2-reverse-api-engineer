@@ -4,9 +4,11 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
+import questionary
+
 from .messages import MessageStore
 from .sync import FileSyncWatcher, get_available_directory
-from .tui import ClaudeUI
+from .tui import THEME_PRIMARY, THEME_SECONDARY, ClaudeUI
 from .utils import generate_folder_name, get_docs_dir, get_scripts_dir
 
 
@@ -102,6 +104,122 @@ class BaseEngineer(ABC):
         if self.sync_watcher:
             return self.sync_watcher.get_status()
         return None
+
+    async def _ask_user_interactive(self, questions: list[dict[str, Any]]) -> dict[str, str]:
+        """Prompt the user interactively for answers to questions.
+
+        Shared logic used by both ClaudeEngineer and CopilotEngineer.
+
+        Args:
+            questions: List of question dicts with keys: question, header, options, multiSelect
+
+        Returns:
+            Dict mapping question text to user's answer string.
+        """
+        answers: dict[str, str] = {}
+
+        self.ui.console.print()
+        self.ui.console.print(f"  [{THEME_PRIMARY}]?[/{THEME_PRIMARY}] [bold white]Agent Question[/bold white]")
+        self.ui.console.print()
+
+        for q in questions:
+            question_text = q.get("question", "") if isinstance(q, dict) else getattr(q, "question", "")
+            header = q.get("header", "") if isinstance(q, dict) else getattr(q, "header", "")
+            options = q.get("options", []) if isinstance(q, dict) else getattr(q, "options", [])
+            multi_select = q.get("multiSelect", False) if isinstance(q, dict) else getattr(q, "multiSelect", False)
+
+            if not question_text:
+                continue
+
+            if header:
+                self.ui.console.print(f"  [dim]{header}[/dim]")
+
+            try:
+                if multi_select:
+                    choices = [
+                        f"{self._get_opt_field(opt, 'label')} - {self._get_opt_field(opt, 'description')}"
+                        if self._get_opt_field(opt, "description")
+                        else self._get_opt_field(opt, "label")
+                        for opt in options
+                    ]
+                    if choices:
+                        selected = await questionary.checkbox(
+                            f" > {question_text}",
+                            choices=choices,
+                            qmark="",
+                            style=questionary.Style(
+                                [
+                                    ("pointer", f"fg:{THEME_PRIMARY} bold"),
+                                    ("highlighted", f"fg:{THEME_PRIMARY} bold"),
+                                    ("selected", f"fg:{THEME_PRIMARY}"),
+                                ]
+                            ),
+                        ).ask_async()
+
+                        if selected is None:
+                            raise KeyboardInterrupt
+
+                        labels = [s.split(" - ")[0] if " - " in s else s for s in selected]
+                        answers[question_text] = ", ".join(labels)
+                    else:
+                        answer = await questionary.text(
+                            f" > {question_text}",
+                            qmark="",
+                            style=questionary.Style([("question", f"fg:{THEME_SECONDARY}")]),
+                        ).ask_async()
+                        if answer is None:
+                            raise KeyboardInterrupt
+                        answers[question_text] = answer.strip()
+                else:
+                    choices = [
+                        f"{self._get_opt_field(opt, 'label')} - {self._get_opt_field(opt, 'description')}"
+                        if self._get_opt_field(opt, "description")
+                        else self._get_opt_field(opt, "label")
+                        for opt in options
+                    ]
+                    if choices:
+                        answer = await questionary.select(
+                            f" > {question_text}",
+                            choices=choices,
+                            qmark="",
+                            style=questionary.Style(
+                                [
+                                    ("pointer", f"fg:{THEME_PRIMARY} bold"),
+                                    ("highlighted", f"fg:{THEME_PRIMARY} bold"),
+                                ]
+                            ),
+                        ).ask_async()
+
+                        if answer is None:
+                            raise KeyboardInterrupt
+
+                        label = answer.split(" - ")[0] if " - " in answer else answer
+                        answers[question_text] = label
+                    else:
+                        answer = await questionary.text(
+                            f" > {question_text}",
+                            qmark="",
+                            style=questionary.Style([("question", f"fg:{THEME_SECONDARY}")]),
+                        ).ask_async()
+                        if answer is None:
+                            raise KeyboardInterrupt
+                        answers[question_text] = answer.strip()
+
+                self.ui.console.print(f"  [dim]→ {answers[question_text]}[/dim]")
+
+            except KeyboardInterrupt:
+                self.ui.console.print("  [dim]User cancelled question[/dim]")
+                answers[question_text] = ""
+
+        self.ui.console.print()
+        return answers
+
+    @staticmethod
+    def _get_opt_field(opt: Any, field: str) -> str:
+        """Get a field from an option, supporting both dict and object access."""
+        if isinstance(opt, dict):
+            return opt.get(field, "")
+        return getattr(opt, field, "")
 
     def _get_output_extension(self) -> str:
         """Return file extension based on output language."""
@@ -333,7 +451,9 @@ Here is the output directory where you should save your generated files:
 </output_dir>
 
 **IMPORTANT: You have access to the AskUserQuestion tool to ask clarifying questions during your analysis.**
-Use this tool when you need to clarify functional requirements, prioritize features, choose between implementation approaches, or gather any other information that would help you generate better {task_description}.
+Use this tool when you need to clarify functional requirements, prioritize features, choose between implementation approaches, or gather any other information that would help you generate better {
+            task_description
+        }.
 
 Your task is to:
 
@@ -378,7 +498,10 @@ In your scratchpad:
 - Identify any ambiguities or questions you should ask the user using AskUserQuestion
 </scratchpad>
 
-{"" if self.output_mode == "docs" else """If your first attempt doesn't work, analyze what went wrong and try again. Document each attempt and what you learned.
+{
+            ""
+            if self.output_mode == "docs"
+            else '''If your first attempt doesn't work, analyze what went wrong and try again. Document each attempt and what you learned.
 
 <attempt_log>
 For each attempt (up to 5), document:
@@ -388,7 +511,8 @@ For each attempt (up to 5), document:
 - What you changed for the next attempt
 </attempt_log>
 
-"""}After {"documenting" if self.output_mode == "docs" else "testing"}, provide your final response with:
+'''
+        }After {"documenting" if self.output_mode == "docs" else "testing"}, provide your final response with:
 - A summary of the APIs discovered
 - The authentication method used
 - {"The completeness and accuracy of the OpenAPI spec" if self.output_mode == "docs" else "Whether the implementation works"}
@@ -396,7 +520,9 @@ For each attempt (up to 5), document:
 - The paths to the generated files
 
 Your final output should confirm that the files have been created and provide a brief summary of what was accomplished.
-Do not include the full {"spec" if self.output_mode == "docs" else "code"} in your response - just confirm the files were saved and summarize the key findings.
+Do not include the full {
+            "spec" if self.output_mode == "docs" else "code"
+        } in your response - just confirm the files were saved and summarize the key findings.
 """
         if self.additional_instructions:
             base_prompt += f"\n\nAdditional instructions:\n{self.additional_instructions}"
