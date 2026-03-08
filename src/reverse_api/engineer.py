@@ -28,9 +28,7 @@ logging.getLogger("claude_agent_sdk._internal.transport.subprocess_cli").setLeve
 class ClaudeEngineer(BaseEngineer):
     """Uses Claude Agent SDK to analyze HAR files and generate Python API scripts."""
 
-    async def _handle_ask_user_question(
-        self, tool_name: str, input_params: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def _handle_ask_user_question(self, tool_name: str, input_params: dict[str, Any]) -> dict[str, Any]:
         """Handle AskUserQuestion tool by prompting the user interactively."""
         if tool_name != "AskUserQuestion":
             # Default allow for other tools in acceptEdits mode
@@ -41,9 +39,7 @@ class ClaudeEngineer(BaseEngineer):
 
         # Display header
         self.ui.console.print()
-        self.ui.console.print(
-            f"  [{THEME_PRIMARY}]?[/{THEME_PRIMARY}] [bold white]Agent Question[/bold white]"
-        )
+        self.ui.console.print(f"  [{THEME_PRIMARY}]?[/{THEME_PRIMARY}] [bold white]Agent Question[/bold white]")
         self.ui.console.print()
 
         for q in questions:
@@ -63,9 +59,7 @@ class ClaudeEngineer(BaseEngineer):
                 if multi_select:
                     # Multi-select question
                     choices = [
-                        f"{opt.get('label', '')} - {opt.get('description', '')}"
-                        if opt.get("description")
-                        else opt.get("label", "")
+                        f"{opt.get('label', '')} - {opt.get('description', '')}" if opt.get("description") else opt.get("label", "")
                         for opt in options
                     ]
                     if choices:
@@ -86,10 +80,7 @@ class ClaudeEngineer(BaseEngineer):
                             raise KeyboardInterrupt
 
                         # Extract just the labels (before the " - " separator)
-                        labels = [
-                            s.split(" - ")[0] if " - " in s else s
-                            for s in selected
-                        ]
+                        labels = [s.split(" - ")[0] if " - " in s else s for s in selected]
                         answers[question_text] = ", ".join(labels)
                     else:
                         # Text input fallback
@@ -105,9 +96,7 @@ class ClaudeEngineer(BaseEngineer):
                 else:
                     # Single select question
                     choices = [
-                        f"{opt.get('label', '')} - {opt.get('description', '')}"
-                        if opt.get("description")
-                        else opt.get("label", "")
+                        f"{opt.get('label', '')} - {opt.get('description', '')}" if opt.get("description") else opt.get("label", "")
                         for opt in options
                     ]
                     if choices:
@@ -284,6 +273,7 @@ def run_reverse_engineering(
     sdk: str = "claude",
     opencode_provider: str | None = None,
     opencode_model: str | None = None,
+    copilot_model: str | None = None,
     enable_sync: bool = False,
     is_fresh: bool = False,
     output_language: str = "python",
@@ -292,9 +282,10 @@ def run_reverse_engineering(
     """Run reverse engineering with the specified SDK.
 
     Args:
-        sdk: "opencode" or "claude" - determines which SDK to use
+        sdk: "claude", "opencode", or "copilot" - determines which SDK to use
         opencode_provider: Provider ID for OpenCode (e.g., "anthropic")
         opencode_model: Model ID for OpenCode (e.g., "claude-sonnet-4-6")
+        copilot_model: Model ID for Copilot (e.g., "gpt-5")
         enable_sync: Enable real-time file syncing during engineering
         is_fresh: Whether to start fresh (ignore previous scripts)
         output_language: Target language - "python", "javascript", or "typescript"
@@ -318,6 +309,24 @@ def run_reverse_engineering(
             is_fresh=is_fresh,
             output_language=output_language,
             output_mode=output_mode,
+        )
+    elif sdk == "copilot":
+        from .copilot_engineer import CopilotEngineer
+
+        engineer = CopilotEngineer(
+            run_id=run_id,
+            har_path=har_path,
+            prompt=prompt,
+            model=model,
+            additional_instructions=additional_instructions,
+            output_dir=output_dir,
+            verbose=verbose,
+            enable_sync=enable_sync,
+            sdk=sdk,
+            is_fresh=is_fresh,
+            output_language=output_language,
+            output_mode=output_mode,
+            copilot_model=copilot_model,
         )
     else:
         engineer = ClaudeEngineer(
