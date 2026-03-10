@@ -72,6 +72,7 @@ class CopilotEngineer(BaseEngineer):
         self.message_store.save_prompt(prompt)
 
         done_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
         accumulated_text: list[str] = []
 
         def on_event(event: Any) -> None:
@@ -94,7 +95,8 @@ class CopilotEngineer(BaseEngineer):
                         self.usage_metadata["output_tokens"] = usage.get("completion_tokens", 0)
 
             elif event_type == "session.idle":
-                done_event.set()
+                # Use thread-safe call in case SDK invokes callback from a different thread
+                loop.call_soon_threadsafe(done_event.set)
 
             elif event_type == "session.compaction_start":
                 self.ui.console.print("  [dim]session compacting...[/dim]")

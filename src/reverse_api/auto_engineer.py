@@ -631,6 +631,7 @@ class CopilotAutoEngineer:
         eng.message_store.save_prompt(auto_prompt)
 
         done_event = asyncio.Event()
+        loop = asyncio.get_running_loop()
         accumulated_text: list[str] = []
 
         def on_event(event: Any) -> None:
@@ -650,7 +651,8 @@ class CopilotAutoEngineer:
                         eng.usage_metadata["input_tokens"] = usage.get("prompt_tokens", 0)
                         eng.usage_metadata["output_tokens"] = usage.get("completion_tokens", 0)
             elif event_type == "session.idle":
-                done_event.set()
+                # Use thread-safe call in case SDK invokes callback from a different thread
+                loop.call_soon_threadsafe(done_event.set)
 
         client = None
         try:
