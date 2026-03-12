@@ -7,9 +7,10 @@ from typing import Any
 import questionary
 
 from .messages import MessageStore
+from .session import SessionManager
 from .sync import FileSyncWatcher, get_available_directory
 from .tui import THEME_PRIMARY, THEME_SECONDARY, ClaudeUI
-from .utils import generate_folder_name, get_docs_dir, get_scripts_dir
+from .utils import generate_folder_name, get_docs_dir, get_history_path, get_scripts_dir
 
 
 class BaseEngineer(ABC):
@@ -244,26 +245,69 @@ class BaseEngineer(ABC):
                 candidates[language] = client_path
         return candidates
 
+    def _get_recorded_client_path(self, existing_clients: dict[str, Path] | None = None) -> Path | None:
+        """Return the last generated client path recorded in session history."""
+        if self.output_mode == "docs" or self.is_fresh:
+            return None
+
+        try:
+            session_manager = SessionManager(get_history_path())
+            run_data = session_manager.get_run(self.run_id)
+        except Exception:
+            return None
+
+        if not run_data:
+            return None
+
+        script_path = run_data.get("paths", {}).get("script_path")
+        if not script_path:
+            return None
+
+        resolved_path = Path(script_path)
+        if not resolved_path.exists():
+            return None
+
+        candidates = existing_clients or self._get_existing_client_candidates()
+        if resolved_path not in candidates.values():
+            return None
+
+        return resolved_path
+
+    def _get_preferred_existing_client(self) -> tuple[str, Path] | None:
+        """Return the existing client that iterative edits should continue from."""
+        if self.output_mode == "docs" or self.is_fresh:
+            return None
+
+        existing_clients = self._get_existing_client_candidates()
+        if not existing_clients:
+            return None
+
+        recorded_client_path = self._get_recorded_client_path(existing_clients)
+        if recorded_client_path:
+            for language, client_path in existing_clients.items():
+                if client_path == recorded_client_path:
+                    return language, client_path
+
+        return max(
+            existing_clients.items(),
+            key=lambda item: item[1].stat().st_mtime_ns,
+        )
+
     def _resolve_output_language(self, requested_language: str) -> str:
         """Keep iterative edits in the same language as the existing client."""
         if self.output_mode == "docs" or self.is_fresh:
             return requested_language
 
-        existing_clients = self._get_existing_client_candidates()
-        if not existing_clients:
-            return requested_language
+        preferred_client = self._get_preferred_existing_client()
+        if preferred_client:
+            return preferred_client[0]
 
-        if requested_language in existing_clients:
-            return requested_language
-
-        return max(
-            existing_clients.items(),
-            key=lambda item: item[1].stat().st_mtime_ns,
-        )[0]
+        return requested_language
 
     def _get_existing_client_path(self) -> Path | None:
         """Return the current client path when iterating on an existing run."""
-        return self._get_existing_client_candidates().get(self.output_language)
+        preferred_client = self._get_preferred_existing_client()
+        return preferred_client[1] if preferred_client else None
 
     def _get_language_name(self) -> str:
         """Return a human-readable language name."""

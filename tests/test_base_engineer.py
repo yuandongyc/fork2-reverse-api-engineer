@@ -69,16 +69,73 @@ class TestBaseEngineerInit:
 
         with patch("reverse_api.base_engineer.get_scripts_dir", return_value=scripts_dir):
             with patch("reverse_api.base_engineer.MessageStore"):
-                engineer = ConcreteEngineer(
-                    run_id="test123",
-                    har_path=har_path,
-                    prompt="test prompt",
-                    output_language="python",
-                    output_dir=str(tmp_path),
-                )
+                with patch("reverse_api.base_engineer.SessionManager") as mock_session_manager:
+                    mock_session_manager.return_value.get_run.return_value = None
+                    engineer = ConcreteEngineer(
+                        run_id="test123",
+                        har_path=har_path,
+                        prompt="test prompt",
+                        output_language="python",
+                        output_dir=str(tmp_path),
+                    )
 
         assert engineer.output_language == "typescript"
         assert engineer.existing_client_path == client_path
+
+    def test_existing_client_language_uses_recorded_script_path(self, tmp_path):
+        """Recorded script path takes precedence over config and stale files."""
+        har_path = tmp_path / "test.har"
+        har_path.touch()
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        python_client = scripts_dir / "api_client.py"
+        python_client.write_text("print('python')\n")
+        typescript_client = scripts_dir / "api_client.ts"
+        typescript_client.write_text("export {};\n")
+
+        with patch("reverse_api.base_engineer.get_scripts_dir", return_value=scripts_dir):
+            with patch("reverse_api.base_engineer.MessageStore"):
+                with patch("reverse_api.base_engineer.SessionManager") as mock_session_manager:
+                    mock_session_manager.return_value.get_run.return_value = {
+                        "paths": {"script_path": str(typescript_client)}
+                    }
+                    engineer = ConcreteEngineer(
+                        run_id="test123",
+                        har_path=har_path,
+                        prompt="test prompt",
+                        output_language="python",
+                        output_dir=str(tmp_path),
+                    )
+
+        assert engineer.output_language == "typescript"
+        assert engineer.existing_client_path == typescript_client
+
+    def test_existing_client_language_falls_back_to_newest_file(self, tmp_path):
+        """Newest existing client wins when no recorded script path is available."""
+        har_path = tmp_path / "test.har"
+        har_path.touch()
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        python_client = scripts_dir / "api_client.py"
+        python_client.write_text("print('python')\n")
+        typescript_client = scripts_dir / "api_client.ts"
+        typescript_client.write_text("export {};\n")
+        typescript_client.touch()
+
+        with patch("reverse_api.base_engineer.get_scripts_dir", return_value=scripts_dir):
+            with patch("reverse_api.base_engineer.MessageStore"):
+                with patch("reverse_api.base_engineer.SessionManager") as mock_session_manager:
+                    mock_session_manager.return_value.get_run.return_value = None
+                    engineer = ConcreteEngineer(
+                        run_id="test123",
+                        har_path=har_path,
+                        prompt="test prompt",
+                        output_language="python",
+                        output_dir=str(tmp_path),
+                    )
+
+        assert engineer.output_language == "typescript"
+        assert engineer.existing_client_path == typescript_client
 
     def test_fresh_runs_can_switch_output_language(self, tmp_path):
         """Fresh runs ignore existing client language and honor the requested one."""
@@ -255,14 +312,16 @@ class TestBaseEngineerBuildPrompt:
         with patch("reverse_api.base_engineer.get_scripts_dir", return_value=scripts_dir):
             with patch("reverse_api.base_engineer.get_docs_dir", return_value=tmp_path / "docs"):
                 with patch("reverse_api.base_engineer.MessageStore") as mock_ms:
-                    mock_ms.return_value.messages_path = tmp_path / "messages" / "test.jsonl"
-                    eng = ConcreteEngineer(
-                        run_id="test123",
-                        har_path=har_path,
-                        prompt="test prompt",
-                        output_language="python",
-                        output_dir=str(tmp_path),
-                    )
+                    with patch("reverse_api.base_engineer.SessionManager") as mock_session_manager:
+                        mock_ms.return_value.messages_path = tmp_path / "messages" / "test.jsonl"
+                        mock_session_manager.return_value.get_run.return_value = None
+                        eng = ConcreteEngineer(
+                            run_id="test123",
+                            har_path=har_path,
+                            prompt="test prompt",
+                            output_language="python",
+                            output_dir=str(tmp_path),
+                        )
 
         prompt = eng._build_analysis_prompt()
         assert str(client_path) in prompt
