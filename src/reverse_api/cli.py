@@ -356,6 +356,12 @@ def main(ctx: click.Context):
 
 def repl_loop():
     """Main interactive loop for the CLI."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    # Start update check in background to avoid blocking startup
+    update_executor = ThreadPoolExecutor(max_workers=1)
+    update_future = update_executor.submit(check_for_updates)
+
     # Get current SDK and model from config
     sdk = config_manager.get("sdk", "claude")
     if sdk == "opencode":
@@ -369,10 +375,16 @@ def repl_loop():
     console.print("  [dim]shift+tab to cycle modes: manual | engineer | agent | collector[/dim]")
     display_footer(console)
 
-    # Check for updates
-    if update_msg := check_for_updates():
-        console.print(f"  [yellow]{update_msg}[/yellow]")
-        console.print()
+    # Show update message if background check has completed
+    try:
+        update_msg = update_future.result(timeout=0.5)
+        if update_msg:
+            console.print(f"  [yellow]{update_msg}[/yellow]")
+            console.print()
+    except Exception:
+        pass  # Timed out or failed — don't block startup
+    finally:
+        update_executor.shutdown(wait=False)
 
     current_mode = "manual"
 
