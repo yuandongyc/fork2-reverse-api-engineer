@@ -1,3 +1,33 @@
+export interface Session {
+  id: string
+  runId: string
+  name: string
+  tabId: number
+  url?: string
+  domain?: string
+  startTime: string
+  endTime?: string
+  requestCount: number
+  isActive: boolean
+  messages: ChatMessage[]
+  codegenScript?: string
+  codegenSavedPath?: string
+  // Dual save paths
+  codegenHiddenPath?: string
+  codegenVisiblePath?: string
+  codegenVisibleDirectory?: string
+}
+
+export interface ChatMessage {
+  id: string
+  role: 'user' | 'assistant'
+  content?: string
+  events?: AgentEvent[]
+  timestamp: string
+}
+
+export type AppMode = 'capture' | 'codegen'
+
 export interface AppState {
   capturing: boolean
   runId: string | null
@@ -7,6 +37,8 @@ export interface AppState {
     total: number
   }
   current_task?: string | null
+  activeSessionId: string | null
+  mode: AppMode
 }
 
 export interface AgentEvent {
@@ -24,6 +56,17 @@ export interface AgentEvent {
 export interface Settings {
   lastModel: string
   captureTypes: string[]
+  saveLocation: 'downloads' | string  // 'downloads' or custom path
+}
+
+export interface SaveCodegenResult {
+  success: boolean
+  hidden_path?: string
+  visible_path?: string
+  hidden_directory?: string
+  visible_directory?: string
+  domain?: string
+  error?: string
 }
 
 export type MessageType =
@@ -34,6 +77,18 @@ export type MessageType =
   | { type: 'chat'; message: string; model?: string }
   | { type: 'getSettings' }
   | { type: 'saveSettings'; settings: Settings }
+  | { type: 'getSessions' }
+  | { type: 'createSession'; name?: string }
+  | { type: 'switchSession'; sessionId: string }
+  | { type: 'deleteSession'; sessionId: string }
+  | { type: 'renameSession'; sessionId: string; name: string }
+  | { type: 'setMode'; mode: AppMode }
+  | { type: 'startCodegen' }
+  | { type: 'stopCodegen' }
+  | { type: 'clearTraffic' }
+  | { type: 'getCapturedRequests' }
+  | { type: 'getTabInfo' }
+  | { type: 'saveMessages'; messages: ChatMessage[] }
 
 export interface CaptureEvent {
   type: 'complete' | 'failed' | 'started'

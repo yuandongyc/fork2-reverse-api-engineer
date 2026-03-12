@@ -34,7 +34,16 @@ export function AgentAction({ event, previousEvent }: AgentActionProps) {
           />
         )
       }
-      // Don't show tool result output for other tools
+      // Show output for other tools if present
+      if (event.output) {
+        return (
+          <ToolResultAction
+            toolName={event.tool_name || 'Tool'}
+            output={event.output}
+            isError={event.is_error}
+          />
+        )
+      }
       return null
     case 'text':
       return <MarkdownRenderer content={event.content || ''} className="text-white/95" />
@@ -68,7 +77,7 @@ function ToolUseAction({ toolName, toolInput }: { toolName: string; toolInput?: 
   }
   
   return (
-    <div className="text-[11px] text-text-secondary/70">
+    <div className="text-[11px] text-text-secondary/70 break-all">
       <span className="text-primary/80">→</span> <span className="font-medium">{toolName}</span>
       <span className="text-text-secondary/50 ml-2">{getToolDisplay()}</span>
     </div>
@@ -82,7 +91,7 @@ function DoneAction({ cost, durationMs, isError }: { cost?: number; durationMs?:
   if (durationMs) details.push(`Time: ${(durationMs / 1000).toFixed(1)}s`)
   
   return (
-    <div className={`py-3 border-y-2 border-border/30 my-6 ${isError ? 'text-primary' : 'text-green-500/90'}`}>
+    <div className={`py-3 my-6 ${isError ? 'text-primary' : 'text-green-500/90'}`}>
       <div className="text-[12px] font-semibold tracking-wide">{statusText}</div>
       {details.length > 0 && (
         <div className="text-[11px] text-text-secondary/80 mt-1.5 tracking-wide">
@@ -95,9 +104,21 @@ function DoneAction({ cost, durationMs, isError }: { cost?: number; durationMs?:
 
 function ErrorAction({ message }: { message: string }) {
   return (
-    <div className="bg-primary/10 border-l-2 border-primary/50 p-4 space-y-2">
+    <div className="bg-primary/5 p-4 space-y-2 rounded-lg">
       <div className="text-[12px] font-semibold text-primary tracking-wide uppercase">Critical Error</div>
       <div className="text-sm text-primary/90">{message}</div>
+    </div>
+  )
+}
+
+function ToolResultAction({ output, isError }: { toolName: string; output: string; isError?: boolean }) {
+  return (
+    <div className="my-1">
+      <pre className={`text-[11px] leading-relaxed font-mono whitespace-pre-wrap break-all max-h-40 overflow-y-auto custom-scrollbar px-2 py-1.5 rounded-md ${
+        isError ? 'text-red-400/80 bg-red-500/5' : 'text-text-secondary/60 bg-white/[0.02]'
+      }`}>
+        {output}
+      </pre>
     </div>
   )
 }

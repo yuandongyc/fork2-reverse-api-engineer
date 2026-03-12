@@ -35,5 +35,12 @@
     },
     "default_title": "reverse-api-engineer"
   },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content/codegen-recorder.js"],
+      "run_at": "document_start"
+    }
+  ],
   "default_locale": "en"
 }

@@ -11,20 +11,23 @@ Native messaging uses stdin/stdout with length-prefixed JSON messages:
 
 import asyncio
 import json
-import os
 import platform
+import re
 import shutil
 import struct
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from .config import ConfigManager
 from .utils import (
-    generate_run_id,
+    extract_domain_from_har,
+    get_app_dir,
+    get_downloads_dir,
     get_har_dir,
     get_scripts_dir,
-    get_app_dir,
+    get_visible_save_path,
 )
 
 HOST_NAME = "com.reverse_api.engineer"
@@ -64,7 +67,6 @@ def _find_python_interpreter() -> str:
     Raises:
         RuntimeError: If no suitable Python interpreter is found
     """
-    import subprocess
 
     # First, try the current interpreter (the one running this code)
     current_python = sys.executable
@@ -145,6 +147,71 @@ def _check_python_version(python_path: str, min_version: tuple[int, int]) -> boo
     return False
 
 
+def _preflight_claude_cli() -> str | None:
+    """
+    Run a preflight check on the Claude CLI to trigger any macOS Gatekeeper
+    prompts in the terminal (where the user can approve them).
+
+    When Claude Code is later launched as a subprocess by Chrome's native
+    messaging host, Gatekeeper blocks unsigned .node addons silently.
+    Running it once from the terminal lets the user approve it interactively.
+
+    Returns:
+        Warning message if Claude CLI had issues, None if OK.
+    """
+    import subprocess
+
+    try:
+        claude_path = shutil.which("claude")
+        if not claude_path:
+            return (
+                "Warning: 'claude' CLI not found in PATH.\n"
+                "Install it with: npm install -g @anthropic-ai/claude-code\n"
+                "Then run: claude --version\n"
+                "This is needed to approve any macOS security prompts."
+            )
+
+        result = subprocess.run(
+            [claude_path, "--version"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return (
+                "Warning: 'claude --version' failed. Please run it manually:\n"
+                f"  {claude_path} --version\n"
+                "This ensures macOS security prompts are handled before the extension uses it."
+            )
+
+        # On macOS, clear quarantine on the claude-code package directory specifically
+        if platform.system() == "Darwin":
+            claude_resolved = Path(claude_path).resolve()
+            # Walk up to find the @anthropic-ai/claude-code package directory
+            # Typical: .../node_modules/@anthropic-ai/claude-code/cli.js -> parent = claude-code dir
+            claude_pkg_dir = None
+            for parent in claude_resolved.parents:
+                if parent.name == "claude-code" and "anthropic-ai" in str(parent):
+                    claude_pkg_dir = parent
+                    break
+            if claude_pkg_dir and claude_pkg_dir.exists():
+                subprocess.run(
+                    ["xattr", "-rd", "com.apple.quarantine", str(claude_pkg_dir)],
+                    capture_output=True,
+                    timeout=30,
+                )
+
+        return None
+    except subprocess.TimeoutExpired:
+        return (
+            "Warning: 'claude --version' timed out. If you see a macOS security popup,\n"
+            "approve it in System Settings > Privacy & Security, then run:\n"
+            "  claude --version"
+        )
+    except Exception as e:
+        return f"Warning: Could not verify Claude CLI: {e}"
+
+
 def install_native_host(extension_id: str | None = None) -> tuple[bool, str]:
     """
     Install the native messaging host.
@@ -217,7 +284,14 @@ run_host()
         if platform.system() == "Windows":
             _install_windows_registry(manifest_path)
 
-        return True, f"Native host installed successfully.\nManifest: {manifest_path}\nHost script: {host_script}\nPython interpreter: {python_path}"
+        # Preflight Claude CLI to trigger Gatekeeper prompts in the terminal
+        cli_warning = _preflight_claude_cli()
+
+        result_msg = f"Native host installed successfully.\nManifest: {manifest_path}\nHost script: {host_script}\nPython interpreter: {python_path}"
+        if cli_warning:
+            result_msg += f"\n\n{cli_warning}"
+
+        return True, result_msg
 
     except Exception as e:
         return False, f"Failed to install native host: {e}"
@@ -359,7 +433,7 @@ class NativeHostHandler:
             # Save without indentation to improve I/O performance and slightly reduce size.
             # Note: If HAR data embeds response bodies, the overall file can still be very large;
             # this function only controls JSON formatting, not how bodies are stored.
-            har_path.write_text(json.dumps(har_data, separators=(',', ':')))
+            har_path.write_text(json.dumps(har_data, separators=(",", ":")))
 
             self.current_run_id = run_id
 
@@ -496,6 +570,126 @@ class NativeHostHandler:
                 "_callbackId": message.get("_callbackId"),
             }
 
+    def handle_save_codegen_script(self, message: dict[str, Any]) -> dict[str, Any]:
+        """Save codegen script to both hidden and visible locations (dual save)."""
+        try:
+            run_id = message.get("run_id")
+            script_content = message.get("script")
+            filename = Path(message.get("filename", "codegen_script.py")).name or "codegen_script.py"
+            save_location = message.get("save_location", "downloads")
+            domain = message.get("domain")
+
+            if not run_id or not script_content:
+                return {
+                    "success": False,
+                    "error": "Missing run_id or script content",
+                    "_callbackId": message.get("_callbackId"),
+                }
+
+            # Validate run_id (alphanumeric, hyphens, underscores only)
+            if not re.match(r"^[a-zA-Z0-9_-]{1,64}$", run_id):
+                return {
+                    "success": False,
+                    "error": "Invalid run_id format",
+                    "_callbackId": message.get("_callbackId"),
+                }
+
+            # === DUAL SAVE: HIDDEN LOCATION ===
+            # Save to ~/.reverse-api/runs/scripts/{run_id}/ (ID-based for history/sync)
+            scripts_dir = get_scripts_dir(run_id)
+            scripts_dir.mkdir(parents=True, exist_ok=True)
+
+            # Save script file to hidden location
+            hidden_script_path = scripts_dir / filename
+            hidden_script_path.write_text(script_content, encoding="utf-8")
+
+            # Create README with metadata in hidden location
+            readme_path = scripts_dir / "README.md"
+            readme_content = f"""# Codegen Script
+
+Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+Run ID: {run_id}
+
+## Usage
+
+```bash
+python {filename}
+```
+
+This script was generated by the Reverse API Engineer Chrome Extension's codegen feature.
+"""
+            readme_path.write_text(readme_content, encoding="utf-8")
+
+            # === DUAL SAVE: VISIBLE LOCATION ===
+            # Determine base directory for visible save
+            if save_location == "downloads":
+                visible_base_dir = get_downloads_dir()
+            else:
+                # Custom path provided
+                try:
+                    visible_base_dir = Path(save_location)
+                    visible_base_dir.mkdir(parents=True, exist_ok=True)
+                except Exception as e:
+                    # Fallback to downloads if custom path is invalid
+                    print(f"Warning: Invalid save_location '{save_location}', falling back to downloads: {e}")
+                    visible_base_dir = get_downloads_dir()
+
+            # Extract domain if not provided (from HAR or use run_id)
+            if not domain:
+                har_path = get_har_dir(run_id) / "recording.har"
+                if har_path.exists():
+                    domain = extract_domain_from_har(har_path)
+                if not domain:
+                    # Fallback: extract from run_id (e.g., "crx-abc123-domain.com" -> "domain_com")
+                    domain_match = re.search(r"[a-zA-Z0-9_-]+\.([a-zA-Z]{2,})", run_id)
+                    domain = domain_match.group(0) if domain_match else "unknown"
+
+            # Generate visible save path with auto-increment suffix
+            visible_dir = get_visible_save_path(domain, visible_base_dir)
+
+            # Save script to visible location
+            visible_script_path = visible_dir / filename
+            visible_script_path.write_text(script_content, encoding="utf-8")
+
+            # Create README in visible location too
+            visible_readme_path = visible_dir / "README.md"
+            visible_readme_content = f"""# Codegen Script
+
+Generated: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
+Domain: {domain}
+Run ID: {run_id}
+
+## Files
+
+- `{filename}` - The generated Playwright script
+
+## Usage
+
+```bash
+python {filename}
+```
+
+This script was generated by the Reverse API Engineer Chrome Extension.
+"""
+            visible_readme_path.write_text(visible_readme_content, encoding="utf-8")
+
+            return {
+                "success": True,
+                "hidden_path": str(hidden_script_path),
+                "visible_path": str(visible_script_path),
+                "hidden_directory": str(scripts_dir),
+                "visible_directory": str(visible_dir),
+                "domain": domain,
+                "_callbackId": message.get("_callbackId"),
+            }
+
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "_callbackId": message.get("_callbackId"),
+            }
+
     def handle_chat(self, message: dict) -> dict:
         """Handle chat message - streams agent events back to extension."""
         user_message = message.get("message")
@@ -533,10 +727,11 @@ class NativeHostHandler:
             ClaudeSDKClient,
             ResultMessage,
             TextBlock,
+            ThinkingBlock,
             ToolResultBlock,
             ToolUseBlock,
-            ThinkingBlock,
         )
+
         from .utils import get_har_dir, get_scripts_dir
 
         har_dir = get_har_dir(run_id)
@@ -545,7 +740,7 @@ class NativeHostHandler:
         if not har_path.exists():
             return {
                 "type": "error",
-                "message": f"No HAR file found. Please capture traffic first.",
+                "message": "No HAR file found. Please capture traffic first.",
                 "_callbackId": message.get("_callbackId"),
             }
 
@@ -619,7 +814,7 @@ The HAR content is available at the path above. Use the Read tool to analyze it.
                                     {
                                         "type": "agent_event",
                                         "event_type": "thinking",
-                                        "content": block.thinking[:500] + "..." if len(block.thinking) > 500 else block.thinking,
+                                        "content": block.thinking[:2000] + "..." if len(block.thinking) > 2000 else block.thinking,
                                     }
                                 )
                             elif isinstance(block, ToolUseBlock):
@@ -638,7 +833,7 @@ The HAR content is available at the path above. Use the Read tool to analyze it.
                                 is_error = block.is_error if block.is_error else False
                                 output = ""
                                 if hasattr(block, "content"):
-                                    output = str(block.content)[:500] if block.content else ""
+                                    output = str(block.content)[:2000] if block.content else ""
 
                                 send_message(
                                     {
@@ -646,7 +841,7 @@ The HAR content is available at the path above. Use the Read tool to analyze it.
                                         "event_type": "tool_result",
                                         "tool_name": last_tool_name or "Tool",
                                         "is_error": is_error,
-                                        "output": output + "..." if len(output) >= 500 else output,
+                                        "output": output + "..." if len(output) >= 2000 else output,
                                     }
                                 )
 
@@ -734,6 +929,7 @@ The HAR content is available at the path above. Use the Read tool to analyze it.
             "saveHar": self.handle_save_har,
             "generate": self.handle_generate,
             "chat": self.handle_chat,
+            "saveCodegenScript": self.handle_save_codegen_script,
         }
 
         handler = handlers.get(msg_type)

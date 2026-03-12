@@ -1,4 +1,8 @@
-import AnsiToReact from 'ansi-to-react'
+// Strip ANSI escape codes from text
+function stripAnsi(text: string): string {
+  // Matches all common ANSI escape sequences (colors, cursor movement, etc.)
+  return text.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '')
+}
 
 interface TerminalProps {
   command: string
@@ -30,27 +34,23 @@ export function Terminal({
           <span className="text-white/90">{command}</span>
         </div>
       </div>
-      
+
       {(stdout || stderr) && (
         <div className="p-4 font-mono text-[12px] leading-relaxed">
           {stdout && (
-            <div className="text-white/90 whitespace-pre-wrap break-words">
-              <AnsiToReact>{stdout}</AnsiToReact>
-            </div>
+            <pre className="text-white/90 whitespace-pre-wrap break-words">{stripAnsi(stdout)}</pre>
           )}
           {stderr && (
-            <div className="text-primary/90 mt-2 whitespace-pre-wrap break-words">
-              <AnsiToReact>{stderr}</AnsiToReact>
-            </div>
+            <pre className="text-primary/90 mt-2 whitespace-pre-wrap break-words">{stripAnsi(stderr)}</pre>
           )}
         </div>
       )}
-      
+
       <div className={`px-4 py-2 border-t border-border/30 flex items-center gap-3 text-[10px] ${
         isSuccess ? 'text-green-500/80' : 'text-primary/80'
       }`}>
         <span className="font-semibold">
-          {isSuccess ? '✓' : '✗'} Exit {exitCode}
+          {isSuccess ? '\u2713' : '\u2717'} Exit {exitCode}
         </span>
         {durationMs !== undefined && (
           <span className="text-text-secondary/60">

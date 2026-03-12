@@ -8,23 +8,49 @@ import {
   getSettings,
   saveSettings,
   getCurrentSession,
-  saveCurrentSession,
   clearCapturedRequests,
-  addCapturedRequest
+  getCapturedRequests,
+  addCapturedRequest,
+  getAllSessions,
+  getSession,
+  saveSession,
+  deleteSession as deleteSessionFromStorage,
+  getActiveSessionId,
+  setActiveSessionId,
+  getAppMode,
+  setAppMode,
+  getSaveLocation,
+  updateSessionDualSavePaths,
+  updateSessionMessages
 } from '../shared/storage'
+import type { Session, AppMode } from '../shared/types'
 
 let currentRunId: string | null = null
+let activeSessionId: string | null = null
 let nativeHostConnected = false
+let currentMode: AppMode = 'capture'
+
+// Codegen state
+let codegenActive = false
+let codegenScript = ''
+let codegenTabId: number | null = null
 
 async function initialize(): Promise<void> {
   console.log('Reverse API Engineer: Initializing...')
   chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
 
-  const session = await getCurrentSession()
-  if (session) {
-    currentRunId = session.runId
-    console.log('Restored session:', currentRunId)
+  // Restore active session
+  activeSessionId = await getActiveSessionId()
+  if (activeSessionId) {
+    const session = await getSession(activeSessionId)
+    if (session) {
+      currentRunId = session.runId
+      console.log('Restored session:', currentRunId)
+    }
   }
+
+  // Restore mode
+  currentMode = await getAppMode()
 
   await checkNativeHost()
   captureManager.addListener(handleCaptureEvent)
@@ -45,15 +71,17 @@ async function checkNativeHost(): Promise<boolean> {
 function handleCaptureEvent(event: { type: string; request?: unknown }): void {
   broadcastMessage({ type: 'captureEvent', event })
   if (event.type === 'complete' || event.type === 'failed') {
-    addCapturedRequest(event.request)
+    addCapturedRequest(event.request, activeSessionId || undefined)
   }
 }
 
 function broadcastMessage(message: Record<string, unknown>): void {
-  chrome.runtime.sendMessage(message).catch(() => {})
+  chrome.runtime.sendMessage(message).catch(() => { })
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  // codegenAction messages are handled by the dedicated listener below
+  if (message.type === 'codegenAction') return false
   handleMessage(message)
     .then(sendResponse)
     .catch((error) => {
@@ -63,7 +91,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   return true
 })
 
-async function handleMessage(message: { type: string; [key: string]: unknown }): Promise<unknown> {
+async function handleMessage(message: { type: string;[key: string]: unknown }): Promise<unknown> {
   switch (message.type) {
     case 'getState':
       return getState()
@@ -83,6 +111,45 @@ async function handleMessage(message: { type: string; [key: string]: unknown }):
       return nativeHost.getStatus()
     case 'chat':
       return handleChat(message.message as string, message.model as string | undefined)
+    // Session management
+    case 'getSessions':
+      return getAllSessions()
+    case 'createSession':
+      return createSession(message.name as string | undefined)
+    case 'switchSession':
+      return switchSession(message.sessionId as string)
+    case 'deleteSession':
+      return deleteSession(message.sessionId as string)
+    case 'renameSession':
+      return renameSession(message.sessionId as string, message.name as string)
+    // Mode management
+    case 'setMode':
+      return setMode(message.mode as AppMode)
+    case 'startCodegen':
+      return startCodegen()
+    case 'stopCodegen':
+      return stopCodegen()
+    case 'saveMessages':
+      if (activeSessionId) {
+        await updateSessionMessages(activeSessionId, message.messages as import('../shared/types').ChatMessage[])
+      }
+      return { success: true }
+    case 'clearTraffic':
+      return clearTraffic()
+    case 'getCapturedRequests': {
+      // Only use in-memory entries when actively capturing (they're live data)
+      // Otherwise always read from storage to avoid showing stale data from a previous session
+      if (captureManager.isCapturing()) {
+        const entries = captureManager.getEntries()
+        if (entries.length > 0) return entries
+      }
+      return getCapturedRequests(activeSessionId || undefined)
+    }
+    case 'getTabInfo':
+      return getTabInfo()
+    // Codegen state for content script
+    case 'getCodegenState':
+      return { codegenActive, codegenTabId }
     default:
       throw new Error(`Unknown message type: ${message.type}`)
   }
@@ -90,17 +157,366 @@ async function handleMessage(message: { type: string; [key: string]: unknown }):
 
 async function getState(): Promise<Record<string, unknown>> {
   const session = await getCurrentSession()
+  const sessions = await getAllSessions()
   const settings = await getSettings()
-  const stats = captureManager.getStats()
+  const liveStats = captureManager.getStats()
+
+  // Use live stats when capturing, otherwise use session's stored request count
+  const stats = captureManager.isCapturing()
+    ? liveStats
+    : { total: session?.requestCount || 0, xhr: 0, fetch: 0, websocket: 0, other: 0 }
+
+  // Get current tab info for restricted URL detection
+  let currentTabUrl = ''
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+    currentTabUrl = tab?.url || ''
+  } catch { /* ignore */ }
 
   return {
     capturing: captureManager.isCapturing(),
     runId: currentRunId,
     session,
+    sessions,
     settings,
     stats,
-    nativeHostConnected
+    nativeHostConnected,
+    activeSessionId,
+    mode: currentMode,
+    codegenActive,
+    codegenScript,
+    currentTabUrl
   }
+}
+
+// Session management functions
+async function createSession(name?: string): Promise<{ success: boolean; session: Session }> {
+  const runId = generateRunId()
+  const sessionId = `session_${Date.now()}`
+
+  // Get current tab info
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+  const url = tab?.url || ''
+  let domain = ''
+  try {
+    if (url) {
+      domain = new URL(url).hostname
+    }
+  } catch (e) {
+    console.error('Failed to parse URL:', e)
+  }
+
+  const sessionName = name || `Session ${new Date().toLocaleString()}`
+
+  const newSession: Session = {
+    id: sessionId,
+    runId,
+    name: sessionName,
+    tabId: tab?.id || 0,
+    url,
+    domain,
+    startTime: new Date().toISOString(),
+    requestCount: 0,
+    isActive: true,
+    messages: []
+  }
+
+  await saveSession(newSession)
+
+  // Don't switch if currently capturing - just create the session
+  if (!captureManager.isCapturing()) {
+    await setActiveSessionId(sessionId)
+    activeSessionId = sessionId
+    currentRunId = runId
+  }
+
+  broadcastMessage({ type: 'sessionCreated', session: newSession })
+
+  return { success: true, session: newSession }
+}
+
+async function switchSession(sessionId: string): Promise<{ success: boolean; session: Session | null }> {
+  // Don't allow switching if capturing or recording codegen on current session
+  if (captureManager.isCapturing()) {
+    throw new Error('Cannot switch sessions while capturing. Stop capture first.')
+  }
+  if (codegenActive) {
+    throw new Error('Cannot switch sessions while recording codegen. Stop codegen first.')
+  }
+
+  const session = await getSession(sessionId)
+  if (!session) {
+    throw new Error('Session not found')
+  }
+
+  // Clear in-memory capture data to prevent stale entries bleeding into the new session
+  captureManager.clear()
+
+  await setActiveSessionId(sessionId)
+  activeSessionId = sessionId
+  currentRunId = session.runId
+
+  broadcastMessage({ type: 'sessionSwitched', session })
+
+  return { success: true, session }
+}
+
+async function deleteSession(sessionId: string): Promise<{ success: boolean }> {
+  // Don't allow deleting active session while capturing
+  if (sessionId === activeSessionId && captureManager.isCapturing()) {
+    throw new Error('Cannot delete active session while capturing.')
+  }
+
+  await deleteSessionFromStorage(sessionId)
+
+  // If we deleted the active session, clear the active state
+  if (sessionId === activeSessionId) {
+    await setActiveSessionId(null)
+    activeSessionId = null
+    currentRunId = null
+  }
+
+  broadcastMessage({ type: 'sessionDeleted', sessionId })
+
+  return { success: true }
+}
+
+async function renameSession(sessionId: string, name: string): Promise<{ success: boolean; session: Session | null }> {
+  const session = await getSession(sessionId)
+  if (!session) {
+    throw new Error('Session not found')
+  }
+
+  session.name = name
+  await saveSession(session)
+
+  broadcastMessage({ type: 'sessionRenamed', session })
+
+  return { success: true, session }
+}
+
+// Mode management
+async function setMode(mode: AppMode): Promise<{ success: boolean; mode: AppMode }> {
+  currentMode = mode
+  await setAppMode(mode)
+  broadcastMessage({ type: 'modeChanged', mode })
+  return { success: true, mode }
+}
+
+// Codegen functions
+async function startCodegen(): Promise<{ success: boolean }> {
+  if (codegenActive) {
+    throw new Error('Codegen already active')
+  }
+
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+  if (!tab?.id) throw new Error('No active tab')
+  codegenTabId = tab.id
+
+  codegenActive = true
+  codegenScript = `from playwright.sync_api import sync_playwright
+
+def run():
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=False)
+        page = browser.new_page()
+        page.goto("${escapePythonString(tab.url || 'about:blank')}")
+
+`
+
+  // Send message to content script to start recording
+  try {
+    await chrome.tabs.sendMessage(codegenTabId, { type: 'startCodegenRecording' })
+  } catch (error) {
+    console.error('Failed to start content script recording:', error)
+  }
+
+  broadcastMessage({ type: 'codegenStarted', script: codegenScript })
+
+  return { success: true }
+}
+
+async function stopCodegen(): Promise<{ success: boolean; script: string; savedPath?: string; visiblePath?: string; visibleDirectory?: string }> {
+  if (!codegenActive) {
+    throw new Error('Codegen not active')
+  }
+
+  // Close the script
+  codegenScript += `        browser.close()
+
+if __name__ == "__main__":
+    run()
+`
+
+  // Send message to content script to stop recording
+  if (codegenTabId) {
+    try {
+      await chrome.tabs.sendMessage(codegenTabId, { type: 'stopCodegenRecording' })
+    } catch (error) {
+      console.error('Failed to stop content script recording:', error)
+    }
+  }
+
+  codegenActive = false
+  const finalScript = codegenScript
+
+  // Dual save: Hidden (ID-based) + Visible (domain-based)
+  let savedPath: string | undefined
+  let visiblePath: string | undefined
+  let visibleDirectory: string | undefined
+
+  if (activeSessionId) {
+    const session = await getSession(activeSessionId)
+    if (session) {
+      session.codegenScript = finalScript
+
+      // Try to save via native host with dual save
+      if (nativeHostConnected && session.runId) {
+        try {
+          // Get user's preferred save location
+          const saveLocation = await getSaveLocation()
+          const domain = session.domain
+
+          // Call native host with dual save enabled
+          const response = await nativeHost.saveCodegenScript(
+            session.runId,
+            finalScript,
+            'codegen_script.py',
+            saveLocation,
+            domain
+          )
+
+          if (response.success) {
+            // Hidden path (for history/sync)
+            savedPath = response.hidden_path
+            session.codegenSavedPath = savedPath
+
+            // Visible path (easy to find)
+            visiblePath = response.visible_path
+            visibleDirectory = response.visible_directory
+            session.codegenVisiblePath = visiblePath
+            session.codegenVisibleDirectory = visibleDirectory
+
+            // Update session with dual save paths
+            await updateSessionDualSavePaths(
+              activeSessionId,
+              response.hidden_path || '',
+              response.visible_path || '',
+              response.visible_directory || ''
+            )
+
+            console.log('Codegen script saved (dual save):')
+            console.log('  Hidden:', response.hidden_path)
+            console.log('  Visible:', response.visible_path)
+          } else if (response.error) {
+            console.error('Failed to save codegen script:', response.error)
+          }
+        } catch (error) {
+          console.error('Failed to save codegen script via native host:', error)
+        }
+      }
+
+      await saveSession(session)
+    }
+  }
+
+  broadcastMessage({
+    type: 'codegenStopped',
+    script: finalScript,
+    savedPath,
+    visiblePath,
+    visibleDirectory
+  })
+
+  codegenTabId = null
+
+  return { success: true, script: finalScript, savedPath, visiblePath, visibleDirectory }
+}
+
+// Escape string for Python code generation
+function escapePythonString(str: string): string {
+  return str
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+    .replace(/\t/g, '\\t')
+}
+
+// Listen for codegen events from content script
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === 'codegenAction' && codegenActive && sender.tab?.id === codegenTabId) {
+    const { action, selector, value, url, scrollX, scrollY, causedByClick } = message
+    let code = ''
+
+    switch (action) {
+      case 'click':
+        code = `        page.click("${escapePythonString(selector)}")\n`
+        break
+      case 'fill':
+        code = `        page.fill("${escapePythonString(selector)}", "${escapePythonString(value)}")\n`
+        break
+      case 'navigate':
+        if (causedByClick) {
+          // Navigation caused by click - add as comment
+          code = `        # Navigated to: ${escapePythonString(url)}\n`
+        } else {
+          // Independent navigation - add as action
+          code = `        page.goto("${escapePythonString(url)}")\n`
+        }
+        break
+      case 'select':
+        code = `        page.select_option("${escapePythonString(selector)}", "${escapePythonString(value)}")\n`
+        break
+      case 'scroll':
+        code = `        page.evaluate("window.scrollTo(${scrollX}, ${scrollY})")\n`
+        break
+    }
+
+    if (code) {
+      codegenScript += code
+      broadcastMessage({ type: 'codegenUpdate', script: codegenScript, newCode: code })
+    }
+
+    sendResponse({ success: true })
+    return true
+  }
+  return false
+})
+
+async function clearTraffic(): Promise<{ success: boolean }> {
+  if (captureManager.isCapturing()) {
+    throw new Error('Cannot clear traffic while capturing. Stop capture first.')
+  }
+  // Clear in-memory entries
+  captureManager.clear()
+  // Clear stored requests for active session
+  if (activeSessionId) {
+    await clearCapturedRequests(activeSessionId)
+    const session = await getSession(activeSessionId)
+    if (session) {
+      session.requestCount = 0
+      await saveSession(session)
+    }
+  }
+  broadcastMessage({ type: 'trafficCleared' })
+  return { success: true }
+}
+
+async function getTabInfo(): Promise<{ url: string; isRestricted: boolean }> {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+  const url = tab?.url || ''
+  const restrictedProtocols = ['chrome:', 'chrome-extension:', 'edge:', 'about:', 'data:', 'file:', 'view-source:']
+  let isRestricted = !url
+  if (url) {
+    try {
+      const urlObj = new URL(url)
+      isRestricted = restrictedProtocols.includes(urlObj.protocol)
+    } catch {
+      isRestricted = true
+    }
+  }
+  return { url, isRestricted }
 }
 
 async function startCapture(tabId?: number): Promise<{ success: boolean; runId: string; tabId: number }> {
@@ -114,18 +530,32 @@ async function startCapture(tabId?: number): Promise<{ success: boolean; runId: 
     tabId = tab.id
   }
 
-  currentRunId = generateRunId()
+  // Create a new session if none exists
+  if (!activeSessionId) {
+    const { session } = await createSession()
+    activeSessionId = session.id
+    currentRunId = session.runId
+  }
+
+  // Only generate a new run ID if the session doesn't have one yet
+  if (!currentRunId) {
+    currentRunId = generateRunId()
+  }
+
   const settings = await getSettings()
-  await clearCapturedRequests()
+  // Don't clear captured requests — append to existing data on resume
 
   await captureManager.start(tabId, { captureTypes: settings.captureTypes })
 
-  await saveCurrentSession({
-    runId: currentRunId,
-    tabId,
-    startTime: new Date().toISOString(),
-    requestCount: 0
-  })
+  // Update the active session
+  const session = await getSession(activeSessionId)
+  if (session) {
+    session.runId = currentRunId
+    session.tabId = tabId
+    if (!session.startTime) session.startTime = new Date().toISOString()
+    session.isActive = true
+    await saveSession(session)
+  }
 
   chrome.action.setBadgeText({ text: 'REC' })
   chrome.action.setBadgeBackgroundColor({ color: '#ff0000' })
@@ -145,7 +575,8 @@ async function stopCapture(): Promise<{ success: boolean; runId: string | null; 
   if (session && har) {
     session.endTime = new Date().toISOString()
     session.requestCount = har.log.entries.length
-    await saveCurrentSession(session)
+    session.isActive = false
+    await saveSession(session)
   }
 
   let harPath: string | null = null

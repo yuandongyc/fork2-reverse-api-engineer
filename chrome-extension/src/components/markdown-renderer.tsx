@@ -1,8 +1,21 @@
 import React from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism'
+import python from 'react-syntax-highlighter/dist/esm/languages/prism/python'
+import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash'
+import json from 'react-syntax-highlighter/dist/esm/languages/prism/json'
+import javascript from 'react-syntax-highlighter/dist/esm/languages/prism/javascript'
+import typescript from 'react-syntax-highlighter/dist/esm/languages/prism/typescript'
+
+SyntaxHighlighter.registerLanguage('python', python)
+SyntaxHighlighter.registerLanguage('bash', bash)
+SyntaxHighlighter.registerLanguage('json', json)
+SyntaxHighlighter.registerLanguage('javascript', javascript)
+SyntaxHighlighter.registerLanguage('typescript', typescript)
+
+const registeredLanguages = new Set(['python', 'bash', 'json', 'javascript', 'typescript'])
 
 interface MarkdownRendererProps {
   content: string
@@ -11,29 +24,33 @@ interface MarkdownRendererProps {
 
 export function MarkdownRenderer({ content, className = '' }: MarkdownRendererProps) {
   return (
-    <div className={`text-[14px] text-white/90 leading-relaxed space-y-4 prose prose-invert prose-sm max-w-none ${className}`}>
+    <div className={`text-[14px] text-white/90 leading-relaxed space-y-4 prose prose-invert prose-sm max-w-none overflow-hidden break-words ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
           code({ node, inline, className, children, ...props }: any) {
             const match = /language-(\w+)/.exec(className || '')
-            const language = match ? match[1] : ''
+            const rawLang = match ? match[1] : ''
+            const language = registeredLanguages.has(rawLang) ? rawLang : ''
             return !inline && match ? (
               <div className="my-4 border-l-2 border-border/40 bg-black/50 overflow-hidden">
-                {language && (
+                {rawLang && (
                   <div className="bg-white/5 px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-text-secondary border-b border-border/30">
-                    {language}
+                    {rawLang}
                   </div>
                 )}
                 <SyntaxHighlighter
                   style={vscDarkPlus}
                   language={language}
                   PreTag="div"
+                  wrapLongLines
                   className="!bg-transparent !p-4 !m-0"
                   customStyle={{
                     margin: 0,
                     padding: 0,
                     background: 'transparent',
+                    overflowX: 'hidden',
+                    wordBreak: 'break-all',
                   }}
                   {...props}
                 >
