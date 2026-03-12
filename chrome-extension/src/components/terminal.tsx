@@ -1,3 +1,9 @@
+// Strip ANSI escape codes from text
+function stripAnsi(text: string): string {
+  // Matches all common ANSI escape sequences (colors, cursor movement, etc.)
+  return text.replace(/\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/g, '')
+}
+
 interface TerminalProps {
   command: string
   stdout?: string
@@ -32,10 +38,10 @@ export function Terminal({
       {(stdout || stderr) && (
         <div className="p-4 font-mono text-[12px] leading-relaxed">
           {stdout && (
-            <pre className="text-white/90 whitespace-pre-wrap break-words">{stdout}</pre>
+            <pre className="text-white/90 whitespace-pre-wrap break-words">{stripAnsi(stdout)}</pre>
           )}
           {stderr && (
-            <pre className="text-primary/90 mt-2 whitespace-pre-wrap break-words">{stderr}</pre>
+            <pre className="text-primary/90 mt-2 whitespace-pre-wrap break-words">{stripAnsi(stderr)}</pre>
           )}
         </div>
       )}

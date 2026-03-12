@@ -184,14 +184,22 @@ def _preflight_claude_cli() -> str | None:
                 "This ensures macOS security prompts are handled before the extension uses it."
             )
 
-        # On macOS, also clear quarantine on the claude installation
+        # On macOS, clear quarantine on the claude-code package directory specifically
         if platform.system() == "Darwin":
-            claude_dir = str(Path(claude_path).resolve().parent.parent)
-            subprocess.run(
-                ["xattr", "-rd", "com.apple.quarantine", claude_dir],
-                capture_output=True,
-                timeout=30,
-            )
+            claude_resolved = Path(claude_path).resolve()
+            # Walk up to find the @anthropic-ai/claude-code package directory
+            # Typical: .../node_modules/@anthropic-ai/claude-code/cli.js -> parent = claude-code dir
+            claude_pkg_dir = None
+            for parent in claude_resolved.parents:
+                if parent.name == "claude-code" and "anthropic-ai" in str(parent):
+                    claude_pkg_dir = parent
+                    break
+            if claude_pkg_dir and claude_pkg_dir.exists():
+                subprocess.run(
+                    ["xattr", "-rd", "com.apple.quarantine", str(claude_pkg_dir)],
+                    capture_output=True,
+                    timeout=30,
+                )
 
         return None
     except subprocess.TimeoutExpired:

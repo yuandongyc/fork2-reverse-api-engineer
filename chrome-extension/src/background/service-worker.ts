@@ -137,9 +137,12 @@ async function handleMessage(message: { type: string;[key: string]: unknown }): 
     case 'clearTraffic':
       return clearTraffic()
     case 'getCapturedRequests': {
-      // Prefer in-memory entries from capture manager, fall back to storage
-      const entries = captureManager.getEntries()
-      if (entries.length > 0) return entries
+      // Only use in-memory entries when actively capturing (they're live data)
+      // Otherwise always read from storage to avoid showing stale data from a previous session
+      if (captureManager.isCapturing()) {
+        const entries = captureManager.getEntries()
+        if (entries.length > 0) return entries
+      }
       return getCapturedRequests(activeSessionId || undefined)
     }
     case 'getTabInfo':
@@ -245,6 +248,9 @@ async function switchSession(sessionId: string): Promise<{ success: boolean; ses
   if (!session) {
     throw new Error('Session not found')
   }
+
+  // Clear in-memory capture data to prevent stale entries bleeding into the new session
+  captureManager.clear()
 
   await setActiveSessionId(sessionId)
   activeSessionId = sessionId

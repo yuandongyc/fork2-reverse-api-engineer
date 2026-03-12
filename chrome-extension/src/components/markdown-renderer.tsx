@@ -15,6 +15,8 @@ SyntaxHighlighter.registerLanguage('json', json)
 SyntaxHighlighter.registerLanguage('javascript', javascript)
 SyntaxHighlighter.registerLanguage('typescript', typescript)
 
+const registeredLanguages = new Set(['python', 'bash', 'json', 'javascript', 'typescript'])
+
 interface MarkdownRendererProps {
   content: string
   className?: string
@@ -28,12 +30,13 @@ export function MarkdownRenderer({ content, className = '' }: MarkdownRendererPr
         components={{
           code({ node, inline, className, children, ...props }: any) {
             const match = /language-(\w+)/.exec(className || '')
-            const language = match ? match[1] : ''
+            const rawLang = match ? match[1] : ''
+            const language = registeredLanguages.has(rawLang) ? rawLang : ''
             return !inline && match ? (
               <div className="my-4 border-l-2 border-border/40 bg-black/50 overflow-hidden">
-                {language && (
+                {rawLang && (
                   <div className="bg-white/5 px-4 py-2 text-[10px] font-semibold uppercase tracking-wide text-text-secondary border-b border-border/30">
-                    {language}
+                    {rawLang}
                   </div>
                 )}
                 <SyntaxHighlighter

@@ -66,42 +66,25 @@ const deviconMap: Record<string, string> = {
 	nodejs: "devicon-nodejs-plain colored",
 };
 
-// Map common language names to Prism-supported languages
+// Languages registered with PrismLight
+const registeredLanguages = new Set(["python", "bash", "json", "javascript", "typescript"]);
+
+// Map common language names to Prism language identifiers.
+// Only languages in registeredLanguages will get syntax highlighting;
+// others fall back to plain text.
 const languageMap: Record<string, string> = {
 	javascript: "javascript",
 	js: "javascript",
 	typescript: "typescript",
 	ts: "typescript",
-	tsx: "tsx",
-	jsx: "jsx",
+	tsx: "typescript",
+	jsx: "javascript",
 	python: "python",
 	py: "python",
-	java: "java",
-	cpp: "cpp",
-	c: "c",
-	csharp: "csharp",
-	cs: "csharp",
-	ruby: "ruby",
-	rb: "ruby",
-	go: "go",
-	rust: "rust",
-	rs: "rust",
-	php: "php",
-	swift: "swift",
-	kotlin: "kotlin",
-	kt: "kotlin",
-	html: "html",
-	css: "css",
 	json: "json",
-	xml: "xml",
-	yaml: "yaml",
-	yml: "yaml",
-	markdown: "markdown",
-	md: "markdown",
 	bash: "bash",
 	shell: "bash",
 	sh: "bash",
-	sql: "sql",
 };
 
 export interface CodeBlockProps {
@@ -122,7 +105,8 @@ export const CodeBlock: FC<CodeBlockProps> = ({
 	const [copied, setCopied] = useState(false);
 
 	const hasCode = children.trim().length > 0;
-	const mappedLang = languageMap[language.toLowerCase()] || "text";
+	const rawLang = languageMap[language.toLowerCase()] || language.toLowerCase();
+	const mappedLang = registeredLanguages.has(rawLang) ? rawLang : "text";
 
 	const handleCopy = async () => {
 		if (!hasCode) return;
