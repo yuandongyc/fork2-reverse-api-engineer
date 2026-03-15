@@ -6,7 +6,7 @@ from rich.console import Console
 from rich.live import Live
 from rich.text import Text
 
-from .tui import ERROR_CTA
+from .tui import ERROR_CTA, MODE_COLORS
 
 # Theme configuration (matching tui.py)
 THEME_PRIMARY = "#ff5f50"
@@ -34,18 +34,21 @@ class OpenCodeUI:
         prompt: str,
         model: str | None = None,
         sdk: str | None = None,
+        mode: str | None = None,
     ) -> None:
         """Display the session header."""
         from . import __version__
 
+        mode_color = MODE_COLORS.get(mode or "", THEME_PRIMARY)
+
         self.console.print()
-        self.console.print(f" [white]reverse-api[/white] [dim]v{__version__}[/dim]")
+        self.console.print(f" [white]reverse-api[/white] [{mode_color}]v{__version__}[/{mode_color}]")
         self.console.print(f" [dim]━[/dim] [white]{run_id}[/white]")
         if sdk:
-            self.console.print(f" [red]sdk[/red] [red]{sdk}[/red] [red]|[/red] [red]model[/red] [red]{model or '---'}[/red]")
+            self.console.print(f" [dim]sdk[/dim]    [white]{sdk}[/white] [dim]|[/dim] [dim]model[/dim] [white]{model or '---'}[/white]")
         else:
-            self.console.print(f" [dim]model[/dim] [white]{model or '---'}[/white]")
-        self.console.print(f" [{THEME_PRIMARY}]task[/{THEME_PRIMARY}]   [white]{prompt}[/white]")
+            self.console.print(f" [dim]model[/dim]  [white]{model or '---'}[/white]")
+        self.console.print(f" [{mode_color}]task[/{mode_color}]   [white]{prompt}[/white]")
         self.console.print()
 
     def start_analysis(self) -> None:

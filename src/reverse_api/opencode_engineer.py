@@ -136,7 +136,7 @@ class OpenCodeEngineer(BaseEngineer):
 
     async def analyze_and_generate(self) -> dict[str, Any] | None:
         """Run the reverse engineering analysis with OpenCode."""
-        self.opencode_ui.header(self.run_id, self.prompt, self.opencode_model, self.sdk)
+        self.opencode_ui.header(self.run_id, self.prompt, self.opencode_model, self.sdk, mode="engineer")
         self.opencode_ui.start_analysis()
 
         # Save the prompt to messages
@@ -555,7 +555,7 @@ class OpenCodeEngineer(BaseEngineer):
         if part_type == "text":
             text = part.get("text", "")
             debug_log(f"Handling text part: id={part_id}, delta={'yes' if delta else 'no'}, len={len(text)}")
-            
+
             # Filter out known prompt text patterns that get echoed back
             # This prevents the tag context section from appearing in streaming output
             # Check for the specific tag context pattern that appears at the end of prompts
@@ -563,7 +563,7 @@ class OpenCodeEngineer(BaseEngineer):
             if tag_context_pattern in text and "Note: Full message history is available" in text:
                 debug_log(f"Filtering out echoed tag context from streaming output")
                 return
-            
+
             # Use delta for incremental updates if available
             self.opencode_ui.update_text(text, delta)
 

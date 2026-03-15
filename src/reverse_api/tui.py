@@ -14,9 +14,9 @@ ERROR_CTA = "If an unexpected error occurred, please create an issue at https://
 
 
 MODE_COLORS = {
-    "manual": "#ff5f50",  # Coral Red
+    "agent": "#ff5f50",  # Coral Red
+    "manual": "#50ff9f",  # Green/Cyan
     "engineer": "#5f9fff",  # Blue
-    "agent": "#50ff9f",  # Green/Cyan
     "collector": "#ffd700",  # Gold
 }
 
@@ -66,18 +66,20 @@ class ClaudeUI:
         self._tool_count = 0
         self._tools_used: list[str] = []
 
-    def header(self, run_id: str, prompt: str, model: str | None = None, sdk: str | None = None) -> None:
+    def header(self, run_id: str, prompt: str, model: str | None = None, sdk: str | None = None, mode: str | None = None) -> None:
         """Display the session header."""
         from . import __version__
 
+        mode_color = MODE_COLORS.get(mode or "", THEME_PRIMARY)
+
         self.console.print()
-        self.console.print(f" [white]reverse-api[/white] [dim]v{__version__}[/dim]")
+        self.console.print(f" [white]reverse-api[/white] [{mode_color}]v{__version__}[/{mode_color}]")
         self.console.print(f" [dim]━[/dim] [white]{run_id}[/white]")
         if sdk:
-            self.console.print(f" [red]sdk[/red] [red]{sdk}[/red] [red]|[/red] [red]model[/red] [red]{model or '---'}[/red]")
+            self.console.print(f" [dim]sdk[/dim]    [white]{sdk}[/white] [dim]|[/dim] [dim]model[/dim] [white]{model or '---'}[/white]")
         else:
-            self.console.print(f" [dim]model[/dim] [white]{model or '---'}[/white]")
-        self.console.print(f" [{THEME_PRIMARY}]task[/{THEME_PRIMARY}]   [white]{prompt}[/white]")
+            self.console.print(f" [dim]model[/dim]  [white]{model or '---'}[/white]")
+        self.console.print(f" [{mode_color}]task[/{mode_color}]   [white]{prompt}[/white]")
         self.console.print()
 
     def start_analysis(self) -> None:

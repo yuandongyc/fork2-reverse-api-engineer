@@ -66,7 +66,7 @@ class Collector:
         Returns:
             Result dict with output_path and collected_items, or None on error
         """
-        self.ui.header(self.run_id, self.prompt, self.model)
+        self.ui.header(self.run_id, self.prompt, self.model, mode="collector")
         self.ui.start_collecting()
 
         self._folder_name = generate_folder_name(self.prompt)
@@ -288,7 +288,7 @@ When complete, briefly summarize what was collected.
     def _export_readme(self, readme_path: Path, items: list[dict[str, Any]], sources: set[str]) -> None:
         """Generate README with collection metadata."""
         folder_name = self._folder_name or "collection"
-        readme_content = f"""# {folder_name.replace('_', ' ').title()}
+        readme_content = f"""# {folder_name.replace("_", " ").title()}
 
 ## Query
 {self.prompt}

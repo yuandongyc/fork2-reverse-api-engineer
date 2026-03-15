@@ -69,7 +69,7 @@ class CopilotEngineer(BaseEngineer):
             )
             return None
 
-        self.ui.header(self.run_id, self.prompt, self.copilot_model, self.sdk)
+        self.ui.header(self.run_id, self.prompt, self.copilot_model, self.sdk, mode="engineer")
         self.ui.start_analysis()
 
         prompt = self._build_analysis_prompt()

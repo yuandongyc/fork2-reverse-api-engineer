@@ -15,12 +15,12 @@ class CollectorUI:
         self.verbose = verbose
         self._items_collected = 0
 
-    def header(self, run_id: str, prompt: str, model: str | None = None) -> None:
+    def header(self, run_id: str, prompt: str, model: str | None = None, **kwargs) -> None:
         """Display the collector session header."""
         from . import __version__
 
         self.console.print()
-        self.console.print(f" [white]reverse-api[/white] [dim]v{__version__}[/dim]")
+        self.console.print(f" [white]reverse-api[/white] [{COLLECTOR_COLOR}]v{__version__}[/{COLLECTOR_COLOR}]")
         self.console.print(f" [dim]━[/dim] [white]{run_id}[/white]")
         self.console.print(f" [{COLLECTOR_COLOR}]collector[/{COLLECTOR_COLOR}] [dim]|[/dim] [dim]model[/dim] [white]{model or '---'}[/white]")
         self.console.print(f" [{COLLECTOR_COLOR}]task[/{COLLECTOR_COLOR}]      [white]{prompt[:80]}{'...' if len(prompt) > 80 else ''}[/white]")
@@ -86,6 +86,7 @@ class CollectorUI:
     def error(self, message: str) -> None:
         """Display error message."""
         from .tui import ERROR_CTA
+
         self.console.print()
         self.console.print(f" [dim]![/dim] [red]error:[/red] {message}")
         self.console.print(f" [dim]{ERROR_CTA}[/dim]")
