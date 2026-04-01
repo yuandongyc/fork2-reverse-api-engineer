@@ -1,13 +1,47 @@
 """Tests for auto_engineer.py - Auto mode engineers."""
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from claude_agent_sdk import (
+    AssistantMessage,
+    ResultMessage,
+    TextBlock,
+    ToolResultBlock,
+    ToolUseBlock,
+)
 
 from reverse_api.auto_engineer import ClaudeAutoEngineer, OpenCodeAutoEngineer
+
+
+@dataclass
+class ToolResultWithResult(ToolResultBlock):
+    """Tool result with legacy ``result`` attribute (engineer.py fallback)."""
+
+    result: str | None = None
+
+
+@dataclass
+class ToolResultWithOutput(ToolResultBlock):
+    """Tool result with legacy ``output`` attribute (engineer.py fallback)."""
+
+    output: str | None = None
+
+
+def _sdk_result_message(*, is_error: bool = False, result: str | None = None) -> ResultMessage:
+    return ResultMessage(
+        subtype="test",
+        duration_ms=0,
+        duration_api_ms=0,
+        is_error=is_error,
+        num_turns=1,
+        session_id="test-session",
+        result=result,
+    )
 
 
 class TestClaudeAutoEngineerInit:
@@ -386,10 +420,7 @@ class TestClaudeAutoEngineerAnalyze:
         """ResultMessage with success returns result dict."""
         eng = self._make_engineer(tmp_path)
 
-        from claude_agent_sdk import ResultMessage
-        mock_result = MagicMock(spec=ResultMessage)
-        mock_result.is_error = False
-        mock_result.result = "Success"
+        mock_result = _sdk_result_message(result="Success")
 
         mock_client = AsyncMock()
         mock_client.query = AsyncMock()
@@ -399,13 +430,14 @@ class TestClaudeAutoEngineerAnalyze:
 
         mock_client.receive_response = mock_receive
 
-        with patch("reverse_api.auto_engineer.ClaudeSDKClient") as mock_sdk:
-            mock_sdk.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_sdk.return_value.__aexit__ = AsyncMock(return_value=False)
+        with patch.object(eng, "_prompt_follow_up", new=AsyncMock(return_value=None)):
+            with patch("reverse_api.auto_engineer.ClaudeSDKClient") as mock_sdk:
+                mock_sdk.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+                mock_sdk.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            result = await eng.analyze_and_generate()
-            assert result is not None
-            assert "script_path" in result
+                result = await eng.analyze_and_generate()
+                assert result is not None
+                assert "script_path" in result
 
     @pytest.mark.asyncio
     async def test_result_with_usage(self, tmp_path):
@@ -418,9 +450,7 @@ class TestClaudeAutoEngineerAnalyze:
             "cache_read_input_tokens": 50,
         }
 
-        from claude_agent_sdk import ResultMessage
-        mock_result = MagicMock(spec=ResultMessage)
-        mock_result.is_error = False
+        mock_result = _sdk_result_message()
 
         mock_client = AsyncMock()
         mock_client.query = AsyncMock()
@@ -430,44 +460,30 @@ class TestClaudeAutoEngineerAnalyze:
 
         mock_client.receive_response = mock_receive
 
-        with patch("reverse_api.auto_engineer.ClaudeSDKClient") as mock_sdk:
-            mock_sdk.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_sdk.return_value.__aexit__ = AsyncMock(return_value=False)
+        with patch.object(eng, "_prompt_follow_up", new=AsyncMock(return_value=None)):
+            with patch("reverse_api.auto_engineer.ClaudeSDKClient") as mock_sdk:
+                mock_sdk.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+                mock_sdk.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            result = await eng.analyze_and_generate()
-            if result is not None:
-                assert "usage" in result
+                result = await eng.analyze_and_generate()
+                if result is not None:
+                    assert "usage" in result
 
     @pytest.mark.asyncio
     async def test_assistant_message_with_tools(self, tmp_path):
         """AssistantMessage with ToolUseBlock, ToolResultBlock, TextBlock are processed."""
         eng = self._make_engineer(tmp_path)
 
-        from claude_agent_sdk import (
-            AssistantMessage,
-            ResultMessage,
-            TextBlock,
-            ToolResultBlock,
-            ToolUseBlock,
+        mock_tool_use = ToolUseBlock(id="1", name="Read", input={"file_path": "/test.py"})
+        mock_tool_result = ToolResultBlock(
+            tool_use_id="1", content="file contents", is_error=False
         )
-
-        mock_tool_use = MagicMock(spec=ToolUseBlock)
-        mock_tool_use.name = "Read"
-        mock_tool_use.input = {"file_path": "/test.py"}
-
-        mock_tool_result = MagicMock(spec=ToolResultBlock)
-        mock_tool_result.is_error = False
-        mock_tool_result.content = "file contents"
-
-        mock_text = MagicMock(spec=TextBlock)
-        mock_text.text = "Analyzing the file..."
-
-        mock_assistant = MagicMock(spec=AssistantMessage)
-        mock_assistant.content = [mock_tool_use, mock_tool_result, mock_text]
-        del mock_assistant.usage
-
-        mock_result = MagicMock(spec=ResultMessage)
-        mock_result.is_error = False
+        mock_text = TextBlock(text="Analyzing the file...")
+        mock_assistant = AssistantMessage(
+            content=[mock_tool_use, mock_tool_result, mock_text],
+            model="claude-sonnet-4-6",
+        )
+        mock_result = _sdk_result_message()
 
         mock_client = AsyncMock()
         mock_client.query = AsyncMock()
@@ -478,27 +494,24 @@ class TestClaudeAutoEngineerAnalyze:
 
         mock_client.receive_response = mock_receive
 
-        with patch("reverse_api.auto_engineer.ClaudeSDKClient") as mock_sdk:
-            mock_sdk.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_sdk.return_value.__aexit__ = AsyncMock(return_value=False)
+        with patch.object(eng, "_prompt_follow_up", new=AsyncMock(return_value=None)):
+            with patch("reverse_api.auto_engineer.ClaudeSDKClient") as mock_sdk:
+                mock_sdk.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+                mock_sdk.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            result = await eng.analyze_and_generate()
-            assert result is not None
-            assert "script_path" in result
+                result = await eng.analyze_and_generate()
+                assert result is not None
+                assert "script_path" in result
 
     @pytest.mark.asyncio
     async def test_assistant_message_with_usage(self, tmp_path):
         """AssistantMessage with usage metadata updates tracking."""
         eng = self._make_engineer(tmp_path)
 
-        from claude_agent_sdk import AssistantMessage, ResultMessage
-
-        mock_assistant = MagicMock(spec=AssistantMessage)
-        mock_assistant.content = []
+        mock_assistant = AssistantMessage(content=[], model="claude-sonnet-4-6")
         mock_assistant.usage = {"input_tokens": 500, "output_tokens": 200}
 
-        mock_result = MagicMock(spec=ResultMessage)
-        mock_result.is_error = False
+        mock_result = _sdk_result_message()
 
         mock_client = AsyncMock()
         mock_client.query = AsyncMock()
@@ -509,41 +522,29 @@ class TestClaudeAutoEngineerAnalyze:
 
         mock_client.receive_response = mock_receive
 
-        with patch("reverse_api.auto_engineer.ClaudeSDKClient") as mock_sdk:
-            mock_sdk.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_sdk.return_value.__aexit__ = AsyncMock(return_value=False)
+        with patch.object(eng, "_prompt_follow_up", new=AsyncMock(return_value=None)):
+            with patch("reverse_api.auto_engineer.ClaudeSDKClient") as mock_sdk:
+                mock_sdk.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+                mock_sdk.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            result = await eng.analyze_and_generate()
-            assert result is not None
-            assert eng.usage_metadata.get("input_tokens") == 500
+                result = await eng.analyze_and_generate()
+                assert result is not None
+                assert eng.usage_metadata.get("input_tokens") == 500
 
     @pytest.mark.asyncio
     async def test_tool_result_with_result_attr(self, tmp_path):
         """ToolResultBlock with result attribute (not content) is handled."""
         eng = self._make_engineer(tmp_path)
 
-        from claude_agent_sdk import (
-            AssistantMessage,
-            ResultMessage,
-            ToolResultBlock,
-            ToolUseBlock,
+        mock_tool_use = ToolUseBlock(id="u1", name="Bash", input={"command": "ls"})
+        mock_tool_result = ToolResultWithResult(
+            tool_use_id="u1", content=None, is_error=True, result="command not found"
         )
-
-        mock_tool_use = MagicMock(spec=ToolUseBlock)
-        mock_tool_use.name = "Bash"
-        mock_tool_use.input = {"command": "ls"}
-
-        mock_tool_result = MagicMock(spec=ToolResultBlock)
-        mock_tool_result.is_error = True
-        del mock_tool_result.content
-        mock_tool_result.result = "command not found"
-
-        mock_assistant = MagicMock(spec=AssistantMessage)
-        mock_assistant.content = [mock_tool_use, mock_tool_result]
-        del mock_assistant.usage
-
-        mock_result = MagicMock(spec=ResultMessage)
-        mock_result.is_error = False
+        mock_assistant = AssistantMessage(
+            content=[mock_tool_use, mock_tool_result],
+            model="claude-sonnet-4-6",
+        )
+        mock_result = _sdk_result_message()
 
         mock_client = AsyncMock()
         mock_client.query = AsyncMock()
@@ -554,41 +555,28 @@ class TestClaudeAutoEngineerAnalyze:
 
         mock_client.receive_response = mock_receive
 
-        with patch("reverse_api.auto_engineer.ClaudeSDKClient") as mock_sdk:
-            mock_sdk.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_sdk.return_value.__aexit__ = AsyncMock(return_value=False)
+        with patch.object(eng, "_prompt_follow_up", new=AsyncMock(return_value=None)):
+            with patch("reverse_api.auto_engineer.ClaudeSDKClient") as mock_sdk:
+                mock_sdk.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+                mock_sdk.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            result = await eng.analyze_and_generate()
-            assert result is not None
+                result = await eng.analyze_and_generate()
+                assert result is not None
 
     @pytest.mark.asyncio
     async def test_tool_result_with_output_attr(self, tmp_path):
         """ToolResultBlock with output attribute (not content/result) is handled."""
         eng = self._make_engineer(tmp_path)
 
-        from claude_agent_sdk import (
-            AssistantMessage,
-            ResultMessage,
-            ToolResultBlock,
-            ToolUseBlock,
+        mock_tool_use = ToolUseBlock(id="u2", name="Grep", input={"pattern": "test"})
+        mock_tool_result = ToolResultWithOutput(
+            tool_use_id="u2", content=None, is_error=False, output="grep output here"
         )
-
-        mock_tool_use = MagicMock(spec=ToolUseBlock)
-        mock_tool_use.name = "Grep"
-        mock_tool_use.input = {"pattern": "test"}
-
-        mock_tool_result = MagicMock(spec=ToolResultBlock)
-        mock_tool_result.is_error = False
-        del mock_tool_result.content
-        del mock_tool_result.result
-        mock_tool_result.output = "grep output here"
-
-        mock_assistant = MagicMock(spec=AssistantMessage)
-        mock_assistant.content = [mock_tool_use, mock_tool_result]
-        del mock_assistant.usage
-
-        mock_result = MagicMock(spec=ResultMessage)
-        mock_result.is_error = False
+        mock_assistant = AssistantMessage(
+            content=[mock_tool_use, mock_tool_result],
+            model="claude-sonnet-4-6",
+        )
+        mock_result = _sdk_result_message()
 
         mock_client = AsyncMock()
         mock_client.query = AsyncMock()
@@ -599,12 +587,13 @@ class TestClaudeAutoEngineerAnalyze:
 
         mock_client.receive_response = mock_receive
 
-        with patch("reverse_api.auto_engineer.ClaudeSDKClient") as mock_sdk:
-            mock_sdk.return_value.__aenter__ = AsyncMock(return_value=mock_client)
-            mock_sdk.return_value.__aexit__ = AsyncMock(return_value=False)
+        with patch.object(eng, "_prompt_follow_up", new=AsyncMock(return_value=None)):
+            with patch("reverse_api.auto_engineer.ClaudeSDKClient") as mock_sdk:
+                mock_sdk.return_value.__aenter__ = AsyncMock(return_value=mock_client)
+                mock_sdk.return_value.__aexit__ = AsyncMock(return_value=False)
 
-            result = await eng.analyze_and_generate()
-            assert result is not None
+                result = await eng.analyze_and_generate()
+                assert result is not None
 
     @pytest.mark.asyncio
     async def test_no_result_message_returns_none(self, tmp_path):

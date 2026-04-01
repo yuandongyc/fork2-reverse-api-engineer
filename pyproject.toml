@@ -1,6 +1,6 @@
 [project]
 name = "reverse-api-engineer"
-version = "0.5.0"
+version = "0.6.0"
 description = "A tool to capture browser traffic for API reverse engineering"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -65,6 +65,15 @@ allow-direct-references = true
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/reverse_api"]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "rae_autoscout.mp4",
+    "chrome-extension/packed/**",
+    "chrome-extension/store-assets/**",
+    ".claude/settings.local.json",
+    "chrome-extension/.claude/settings.local.json",
+]
 
 [dependency-groups]
 dev = [

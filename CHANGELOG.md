@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-04-01
+
+### Added
+- **Chrome DevTools MCP agent provider (`chrome-mcp`)**: Agent mode can drive the browser through [Chrome DevTools MCP](https://www.npmjs.com/package/chrome-devtools-mcp) (`--autoConnect`, optional `--no-usage-statistics`) with a dedicated system prompt and SDK wiring alongside the existing Playwright MCP path
+
+### Changed
+- **Agent provider selection**: CLI settings and mode flow distinguish **auto (Playwright MCP)** from **chrome-mcp (Chrome DevTools MCP)**
+- **Packaging**: Source distributions exclude local demo video, packed Chrome extension zip, store-asset screenshots, and per-machine `.claude/settings.local.json` files so PyPI artifacts stay small (wheel unchanged: `src/reverse_api` only)
+
+### Fixed
+- **Tool result blocks** (engineer / agent streaming): When `content` is empty, fall back to `result` or `output` on tool-result blocks so alternate SDK shapes still surface output in the UI and message store
+- **Process title**: Set when the CLI module loads so the terminal shows `reverse-api` earlier in startup
+- **Follow-up prompt**: Flush local sync before reading follow-up input so state is up to date
+- **Tests**: `ClaudeAutoEngineer` analyze tests now use real `claude_agent_sdk` message types (so `isinstance` checks in the streaming loop match) and stub `_prompt_follow_up` to avoid the interactive follow-up path
+
+### Documentation
+- **README**: Agent mode demo GIF
+
 ## [0.5.0] - 2026-03-17
 
 ### Added
