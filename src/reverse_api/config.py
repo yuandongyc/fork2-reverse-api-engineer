@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any
 
 DEFAULT_CONFIG = {
-    "agent_provider": "auto",  # "auto" (default, MCP-based browser + engineering), "browser-use", or "stagehand"
+    "agent_provider": "auto",  # "auto" (Playwright MCP), "chrome-mcp" (Chrome DevTools MCP), "browser-use", or "stagehand"
     "browser_use_model": "bu-llm",  # "bu-llm" or "{provider}/{model_name}" (e.g. "openai/gpt-5-mini")
     "claude_code_model": "claude-sonnet-4-6",
     "collector_model": "claude-sonnet-4-6",  # Model for collector mode

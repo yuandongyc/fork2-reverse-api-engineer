@@ -694,9 +694,10 @@ def handle_settings(mode_color=THEME_PRIMARY):
 
     elif action == "agent_provider":
         provider_choices = [
+            Choice(title="auto (Playwright MCP)", value="auto"),
+            Choice(title="chrome-mcp (Chrome DevTools MCP)", value="chrome-mcp"),
             Choice(title="browser-use", value="browser-use"),
             Choice(title="stagehand", value="stagehand"),
-            Choice(title="auto", value="auto"),
             Choice(title="back", value="back"),
         ]
         provider = questionary.select(
@@ -713,7 +714,20 @@ def handle_settings(mode_color=THEME_PRIMARY):
         ).ask()
         if provider and provider != "back":
             config_manager.set("agent_provider", provider)
-            console.print(f" [dim]updated[/dim] agent provider: {provider}\n")
+            console.print(f" [dim]updated[/dim] agent provider: {provider}")
+            if provider == "chrome-mcp":
+                console.print()
+                console.print(" [bold yellow]Chrome DevTools MCP Setup[/bold yellow]")
+                console.print()
+                console.print(" [white]1.[/white] Open Chrome (version 146 or newer)")
+                console.print(" [white]2.[/white] Navigate to [cyan]chrome://inspect/#remote-debugging[/cyan]")
+                console.print(' [white]3.[/white] Click [bold]"Enable auto-connect"[/bold]')
+                console.print(" [white]4.[/white] Make sure Node.js v20.19+ is installed")
+                console.print()
+                console.print(" [dim]The agent will connect to your real Chrome browser via auto-connect.[/dim]")
+                console.print(" [dim]Your existing sessions, cookies, and auth will be available.[/dim]")
+                console.print(" [dim]Avoid browsing sensitive sites while the agent is active.[/dim]")
+            console.print()
 
     elif action == "opencode_provider":
         current = config_manager.get("opencode_provider", "anthropic")
@@ -1360,13 +1374,13 @@ def run_agent_capture(prompt=None, url=None, reverse_engineer=False, model=None,
     stagehand_model = config_manager.get("stagehand_model", "openai/computer-use-preview-2025-03-11")
     agent_provider = config_manager.get("agent_provider", "browser-use")
 
-    # Route to auto mode if configured
-    if agent_provider == "auto":
+    if agent_provider in ("auto", "chrome-mcp"):
         return run_auto_capture(
             prompt=prompt,
             url=url,
             model=model,
             output_dir=output_dir,
+            agent_provider=agent_provider,
         )
 
     # Record initial session
@@ -1511,7 +1525,7 @@ def run_collector(prompt=None, model=None, output_dir=None):
         traceback.print_exc()
 
 
-def run_auto_capture(prompt=None, url=None, model=None, output_dir=None):
+def run_auto_capture(prompt=None, url=None, model=None, output_dir=None, agent_provider="auto"):
     """Auto mode: LLM-driven browser automation + real-time reverse engineering."""
     output_dir = output_dir or config_manager.get("output_dir")
 
@@ -1519,7 +1533,7 @@ def run_auto_capture(prompt=None, url=None, model=None, output_dir=None):
         options = prompt_interactive_options(
             prompt=prompt,
             url=url,
-            reverse_engineer=False,  # Not applicable for auto mode
+            reverse_engineer=False,
             model=model,
         )
         if "command" in options:
@@ -1528,24 +1542,38 @@ def run_auto_capture(prompt=None, url=None, model=None, output_dir=None):
         url = options.get("url")
         model = options["model"]
 
+    if agent_provider == "chrome-mcp":
+        console.print()
+        console.print(" [dim]chrome devtools mcp (auto-connect)[/dim]")
+        console.print(" [dim]controlling your real chrome browser[/dim]")
+        console.print(" [dim]existing sessions, cookies, and auth available[/dim]")
+        console.print()
+        console.print(" [dim]auto-connect setup:[/dim]")
+        console.print(" [dim] 1. chrome 146+ required[/dim]")
+        console.print(" [dim] 2. go to chrome://inspect/#remote-debugging[/dim]")
+        console.print(' [dim] 3. click "Enable auto-connect"[/dim]')
+        console.print(" [dim] 4. node.js v20.19+[/dim]")
+        console.print()
+        console.print(" [dim]warning: the agent will execute actions on your browser[/dim]")
+        console.print(" [dim]avoid browsing sensitive sites during the session[/dim]")
+        console.print()
+
     run_id = generate_run_id()
     timestamp = get_timestamp()
 
-    # Record initial session with mode="auto"
+    mode_label = "chrome-mcp" if agent_provider == "chrome-mcp" else "auto"
     session_manager.add_run(
         run_id=run_id,
         prompt=prompt,
         timestamp=timestamp,
         url=url,
         model=model,
-        mode="auto",  # Track auto mode in history
+        mode=mode_label,
         paths={"har_dir": str(get_har_dir(run_id, output_dir))},
     )
 
-    # Get SDK configuration
     sdk = config_manager.get("sdk", "claude")
 
-    # Run auto engineer based on SDK
     try:
         output_language = config_manager.get("output_language", "python")
         if sdk == "opencode":
@@ -1555,6 +1583,7 @@ def run_auto_capture(prompt=None, url=None, model=None, output_dir=None):
                 run_id=run_id,
                 prompt=prompt,
                 output_dir=output_dir,
+                agent_provider=agent_provider,
                 opencode_provider=config_manager.get("opencode_provider", "anthropic"),
                 opencode_model=config_manager.get("opencode_model", "claude-opus-4-6"),
                 enable_sync=config_manager.get("real_time_sync", False),
@@ -1569,6 +1598,7 @@ def run_auto_capture(prompt=None, url=None, model=None, output_dir=None):
                 prompt=prompt,
                 copilot_model=config_manager.get("copilot_model", "gpt-5"),
                 output_dir=output_dir,
+                agent_provider=agent_provider,
                 enable_sync=config_manager.get("real_time_sync", False),
                 sdk=sdk,
                 output_language=output_language,
@@ -1581,6 +1611,7 @@ def run_auto_capture(prompt=None, url=None, model=None, output_dir=None):
                 prompt=prompt,
                 model=model or config_manager.get("claude_code_model", "claude-sonnet-4-6"),
                 output_dir=output_dir,
+                agent_provider=agent_provider,
                 enable_sync=config_manager.get("real_time_sync", False),
                 sdk=sdk,
                 output_language=output_language,

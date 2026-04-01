@@ -28,6 +28,38 @@ class TestClaudeAutoEngineerInit:
                     assert eng.har_path == tmp_path / "har" / "recording.har"
 
 
+class TestClaudeAutoEngineerInitChromeMcp:
+    """Test ClaudeAutoEngineer initialization with chrome-mcp provider."""
+
+    def test_init_chrome_mcp(self, tmp_path):
+        """Initializes with agent_provider='chrome-mcp'."""
+        with patch("reverse_api.auto_engineer.get_har_dir", return_value=tmp_path / "har"):
+            with patch("reverse_api.base_engineer.get_scripts_dir", return_value=tmp_path / "scripts"):
+                with patch("reverse_api.base_engineer.MessageStore"):
+                    eng = ClaudeAutoEngineer(
+                        run_id="test123",
+                        prompt="browse and capture",
+                        model="claude-sonnet-4-6",
+                        output_dir=str(tmp_path),
+                        agent_provider="chrome-mcp",
+                    )
+                    assert eng.agent_provider == "chrome-mcp"
+                    assert eng.mcp_run_id == "test123"
+
+    def test_init_default_provider(self, tmp_path):
+        """Default agent_provider is 'auto'."""
+        with patch("reverse_api.auto_engineer.get_har_dir", return_value=tmp_path / "har"):
+            with patch("reverse_api.base_engineer.get_scripts_dir", return_value=tmp_path / "scripts"):
+                with patch("reverse_api.base_engineer.MessageStore"):
+                    eng = ClaudeAutoEngineer(
+                        run_id="test123",
+                        prompt="browse and capture",
+                        model="claude-sonnet-4-6",
+                        output_dir=str(tmp_path),
+                    )
+                    assert eng.agent_provider == "auto"
+
+
 class TestClaudeAutoEngineerPrompt:
     """Test auto prompt building."""
 
@@ -90,6 +122,164 @@ class TestClaudeAutoEngineerPrompt:
         prompt = eng._build_auto_prompt()
         assert "Screenshot" in prompt
         assert "1MB" in prompt
+
+
+class TestChromeMcpPrompt:
+    """Test Chrome DevTools MCP prompt building."""
+
+    def _make_engineer(self, tmp_path, **kwargs):
+        defaults = {
+            "run_id": "test123",
+            "prompt": "browse and capture",
+            "model": "claude-sonnet-4-6",
+            "output_dir": str(tmp_path),
+            "agent_provider": "chrome-mcp",
+        }
+        defaults.update(kwargs)
+        with patch("reverse_api.auto_engineer.get_har_dir", return_value=tmp_path / "har"):
+            with patch("reverse_api.base_engineer.get_scripts_dir", return_value=tmp_path / "scripts"):
+                with patch("reverse_api.base_engineer.MessageStore"):
+                    return ClaudeAutoEngineer(**defaults)
+
+    def test_chrome_mcp_prompt_uses_chrome_tools(self, tmp_path):
+        """Chrome MCP prompt uses Chrome DevTools tool names."""
+        eng = self._make_engineer(tmp_path)
+        prompt = eng._build_chrome_mcp_prompt()
+        assert "navigate_page" in prompt
+        assert "click" in prompt
+        assert "fill" in prompt
+        assert "take_snapshot" in prompt
+        assert "list_network_requests" in prompt
+        assert "get_network_request" in prompt
+
+    def test_chrome_mcp_prompt_no_har_file(self, tmp_path):
+        """Chrome MCP prompt does not reference HAR file saving."""
+        eng = self._make_engineer(tmp_path)
+        prompt = eng._build_chrome_mcp_prompt()
+        assert "There is no HAR file" in prompt
+        assert "browser_close" not in prompt
+
+    def test_chrome_mcp_prompt_mentions_real_browser(self, tmp_path):
+        """Chrome MCP prompt mentions real Chrome browser."""
+        eng = self._make_engineer(tmp_path)
+        prompt = eng._build_chrome_mcp_prompt()
+        assert "REAL Chrome browser" in prompt
+        assert "existing sessions" in prompt
+
+    def test_chrome_mcp_prompt_python(self, tmp_path):
+        """Chrome MCP Python prompt includes correct language."""
+        eng = self._make_engineer(tmp_path)
+        prompt = eng._build_chrome_mcp_prompt()
+        assert "Python" in prompt
+        assert "requests" in prompt
+
+    def test_chrome_mcp_prompt_javascript(self, tmp_path):
+        """Chrome MCP JavaScript prompt includes JS instructions."""
+        eng = self._make_engineer(tmp_path, output_language="javascript")
+        prompt = eng._build_chrome_mcp_prompt()
+        assert "JavaScript" in prompt
+        assert "fetch" in prompt
+
+    def test_chrome_mcp_prompt_typescript(self, tmp_path):
+        """Chrome MCP TypeScript prompt includes TS instructions."""
+        eng = self._make_engineer(tmp_path, output_language="typescript")
+        prompt = eng._build_chrome_mcp_prompt()
+        assert "TypeScript" in prompt
+        assert "interfaces" in prompt
+
+    def test_get_active_prompt_chrome_mcp(self, tmp_path):
+        """_get_active_prompt returns chrome prompt for chrome-mcp provider."""
+        eng = self._make_engineer(tmp_path)
+        prompt = eng._get_active_prompt()
+        assert "Chrome DevTools MCP" in prompt
+        assert "navigate_page" in prompt
+
+    def test_get_active_prompt_auto(self, tmp_path):
+        """_get_active_prompt returns auto prompt for auto provider."""
+        eng = self._make_engineer(tmp_path, agent_provider="auto")
+        prompt = eng._get_active_prompt()
+        assert "browser_navigate" in prompt
+
+
+class TestChromeMcpConfig:
+    """Test MCP configuration selection."""
+
+    def _make_engineer(self, tmp_path, **kwargs):
+        defaults = {
+            "run_id": "test123",
+            "prompt": "browse and capture",
+            "model": "claude-sonnet-4-6",
+            "output_dir": str(tmp_path),
+        }
+        defaults.update(kwargs)
+        with patch("reverse_api.auto_engineer.get_har_dir", return_value=tmp_path / "har"):
+            with patch("reverse_api.base_engineer.get_scripts_dir", return_value=tmp_path / "scripts"):
+                with patch("reverse_api.base_engineer.MessageStore"):
+                    return ClaudeAutoEngineer(**defaults)
+
+    def test_chrome_mcp_config(self, tmp_path):
+        """Chrome MCP returns chrome-devtools server config."""
+        eng = self._make_engineer(tmp_path, agent_provider="chrome-mcp")
+        name, config = eng._get_mcp_config()
+        assert name == "chrome-devtools"
+        assert "chrome-devtools-mcp@latest" in config["args"]
+        assert "--autoConnect" in config["args"]
+
+    def test_auto_mcp_config(self, tmp_path):
+        """Auto provider returns playwright server config."""
+        eng = self._make_engineer(tmp_path, agent_provider="auto")
+        name, config = eng._get_mcp_config()
+        assert name == "playwright"
+        assert "rae-playwright-mcp@latest" in config["args"]
+        assert "--run-id" in config["args"]
+
+
+class TestOpenCodeChromeMcpConfig:
+    """Test OpenCodeAutoEngineer Chrome MCP config."""
+
+    def _make_engineer(self, tmp_path, **kwargs):
+        defaults = {
+            "run_id": "test123",
+            "prompt": "browse and capture",
+            "output_dir": str(tmp_path),
+            "opencode_provider": "anthropic",
+            "opencode_model": "claude-opus-4-6",
+        }
+        defaults.update(kwargs)
+        with patch("reverse_api.auto_engineer.get_har_dir", return_value=tmp_path / "har"):
+            with patch("reverse_api.base_engineer.get_scripts_dir", return_value=tmp_path / "scripts"):
+                with patch("reverse_api.base_engineer.MessageStore"):
+                    with patch("reverse_api.opencode_engineer.OpenCodeUI"):
+                        eng = OpenCodeAutoEngineer(**defaults)
+                        eng._session_id = "sess_test"
+                        return eng
+
+    def test_opencode_chrome_mcp_config(self, tmp_path):
+        """OpenCode chrome-mcp config uses chrome-devtools-mcp."""
+        eng = self._make_engineer(tmp_path, agent_provider="chrome-mcp")
+        config = eng._get_opencode_mcp_config()
+        assert "chrome-devtools" in eng.mcp_name
+        assert "chrome-devtools-mcp@latest" in config["config"]["command"]
+
+    def test_opencode_auto_mcp_config(self, tmp_path):
+        """OpenCode auto config uses rae-playwright-mcp."""
+        eng = self._make_engineer(tmp_path, agent_provider="auto")
+        config = eng._get_opencode_mcp_config()
+        assert "playwright" in eng.mcp_name
+        assert "rae-playwright-mcp@latest" in config["config"]["command"]
+
+    def test_opencode_chrome_mcp_prompt(self, tmp_path):
+        """OpenCode chrome-mcp uses Chrome DevTools prompt."""
+        eng = self._make_engineer(tmp_path, agent_provider="chrome-mcp")
+        prompt = eng._get_active_prompt()
+        assert "Chrome DevTools MCP" in prompt
+        assert "navigate_page" in prompt
+
+    def test_opencode_auto_prompt(self, tmp_path):
+        """OpenCode auto uses Playwright prompt."""
+        eng = self._make_engineer(tmp_path, agent_provider="auto")
+        prompt = eng._get_active_prompt()
+        assert "browser_navigate" in prompt
 
 
 class TestClaudeAutoEngineerAnalyze:

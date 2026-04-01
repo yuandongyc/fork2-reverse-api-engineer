@@ -33,14 +33,13 @@ class ClaudeAutoEngineer(ClaudeEngineer):
         prompt: str,
         model: str,
         output_dir: str | None = None,
+        agent_provider: str = "auto",
         **kwargs,
     ):
         """Initialize auto engineer with expected HAR path (created by MCP)."""
-        # Calculate expected HAR path - MCP will create it during execution
         har_dir = get_har_dir(run_id, output_dir)
         har_path = har_dir / "recording.har"
 
-        # Initialize with expected HAR path (created by MCP via --run-id flag)
         super().__init__(
             run_id=run_id,
             har_path=har_path,
@@ -50,6 +49,7 @@ class ClaudeAutoEngineer(ClaudeEngineer):
             **kwargs,
         )
         self.mcp_run_id = run_id
+        self.agent_provider = agent_provider
 
     def _build_auto_prompt(self) -> str:
         """Build autonomous browsing + engineering prompt."""
@@ -223,6 +223,194 @@ Your final response should confirm the files were created and provide a brief su
 - Any limitations or caveats
 """
 
+    def _build_chrome_mcp_prompt(self) -> str:
+        """Build autonomous browsing + engineering prompt for Chrome DevTools MCP."""
+        language_name = {
+            "python": "Python",
+            "javascript": "JavaScript",
+            "typescript": "TypeScript",
+        }.get(self.output_language, "Python")
+
+        client_filename = self._get_client_filename()
+        run_command = self._get_run_command()
+
+        if self.output_language == "javascript":
+            generation_instructions = f"""2. **Generate JavaScript API client** at `{self.scripts_dir}/{client_filename}`:
+   - Use modern JavaScript (ES2022+) with ESM modules (import/export)
+   - Use native `fetch` API for HTTP requests (Node.js 18+ built-in)
+   - If advanced features needed (retries, interceptors), use `axios`
+   - Include proper authentication handling
+   - Create separate async functions for each API endpoint
+   - Add JSDoc comments for type documentation
+   - Include example usage in main section
+   - Make it production-ready and maintainable
+   - If using external dependencies, generate package.json
+
+3. **Create documentation** at `{self.scripts_dir}/README.md`:
+   - Explain what APIs were discovered
+   - How authentication works
+   - How to use each function
+   - Requirements: Node.js 18+
+   - Any limitations or requirements
+
+4. **Test your implementation**:
+   - If package.json was generated, first run: npm install
+   - Run with: {run_command}
+   - You have up to 5 attempts to fix any issues
+   - If initial implementation fails, analyze errors and iterate"""
+            output_files = f"""1. `{self.scripts_dir}/{client_filename}` - Production JavaScript API client
+2. `{self.scripts_dir}/README.md` - Documentation with usage examples
+3. `{self.scripts_dir}/package.json` - Only if external dependencies are needed"""
+
+        elif self.output_language == "typescript":
+            generation_instructions = f"""2. **Generate TypeScript API client** at `{self.scripts_dir}/{client_filename}`:
+   - Use TypeScript with strict typing enabled
+   - Use ESM modules (import/export syntax)
+   - Use native `fetch` API for HTTP requests (Node.js 18+ built-in)
+   - If advanced features needed, use `axios`
+   - Define TypeScript interfaces for all request/response types
+   - Include proper authentication handling
+   - Create separate async functions for each API endpoint
+   - Export a class-based API client with proper encapsulation
+   - Include example usage in main section
+   - Make it production-ready and maintainable
+   - Generate package.json with tsx, typescript, @types/node
+
+3. **Create documentation** at `{self.scripts_dir}/README.md`:
+   - Explain what APIs were discovered
+   - How authentication works
+   - How to use each function
+   - Requirements: Node.js 18+
+   - Any limitations or requirements
+
+4. **Test your implementation**:
+   - Run: npm install && {run_command}
+   - You have up to 5 attempts to fix any issues
+   - If initial implementation fails, analyze errors and iterate"""
+            output_files = f"""1. `{self.scripts_dir}/{client_filename}` - Production TypeScript API client
+2. `{self.scripts_dir}/README.md` - Documentation with usage examples
+3. `{self.scripts_dir}/package.json` - Dependencies and run scripts"""
+
+        else:  # python
+            generation_instructions = f"""2. **Generate Python API client** at `{self.scripts_dir}/{client_filename}`:
+   - Use `requests` library as default (or Playwright if needed for bot detection)
+   - Include proper authentication handling
+   - Create separate functions for each API endpoint
+   - Add type hints, docstrings, error handling
+   - Include example usage in main section
+   - Make it production-ready and maintainable
+
+3. **Create documentation** at `{self.scripts_dir}/README.md`:
+   - Explain what APIs were discovered
+   - How authentication works
+   - How to use each function
+   - Example usage
+   - Any limitations or requirements
+
+4. **Test your implementation**:
+   - After generating the code, test it to ensure it works
+   - Run with: {run_command}
+   - You have up to 5 attempts to fix any issues
+   - If initial implementation fails, analyze errors and iterate"""
+            output_files = f"""1. `{self.scripts_dir}/{client_filename}` - Production Python API client
+2. `{self.scripts_dir}/README.md` - Documentation with usage examples"""
+
+        return f"""You are an autonomous AI agent with browser control via Chrome DevTools MCP tools.
+You are connected to the user's REAL Chrome browser with their existing sessions, cookies, and authentication.
+Your mission is to browse, monitor network traffic, and generate production-ready {language_name} API code.
+
+<mission>
+{self.prompt}
+</mission>
+
+<output_directory>
+{self.scripts_dir}
+</output_directory>
+
+## WORKFLOW
+
+Follow this workflow step-by-step:
+
+### Phase 1: BROWSE
+Use Chrome DevTools MCP tools to accomplish the mission goal. Available tools:
+- `navigate_page` - Navigate to a URL (type: "url", url: "..."), go back/forward/reload
+- `click` - Click an element by its uid
+- `fill` - Type text into an input, textarea, or select (uid, value)
+- `fill_form` - Fill multiple form elements at once
+- `hover` - Hover over an element
+- `press_key` - Press a key or combination (e.g. "Enter", "Control+A")
+- `new_page` - Open a new page/tab
+- `list_pages` - List open browser pages
+- `select_page` - Switch to a specific page/tab
+- `wait_for` - Wait for text to appear on the page
+- `take_snapshot` - Get accessibility tree (useful for understanding page structure and element uids)
+- `take_screenshot` - Take a screenshot for visual context
+- `evaluate_script` - Execute JavaScript in the current page
+- `list_console_messages` - Check console for errors/logs
+
+**IMPORTANT: You are controlling the user's actual Chrome browser. Their existing login sessions and cookies are available - you do NOT need to log in to sites where they are already authenticated.**
+
+**Screenshot Guidelines:**
+- Screenshots have a 1MB size limit - avoid full-page screenshots when possible
+- Use `take_snapshot()` when you need page structure information without visual details
+- The snapshot gives you element `uid` values needed for `click`, `fill`, etc.
+
+### Phase 2: MONITOR
+While browsing, periodically call `list_network_requests()` to monitor API traffic in real-time:
+- Filter by type (e.g. "xhr", "fetch") to focus on API calls
+- Analyze request URLs, methods, and response status codes
+- Identify authentication patterns (cookies, tokens, headers)
+- Note API endpoints and parameters
+
+For detailed inspection, use `get_network_request(reqid)` to get:
+- Full request headers and body
+- Full response headers and body
+- Timing information
+
+### Phase 3: CAPTURE
+When you have sufficient data or have accomplished the mission goal:
+1. Call `list_network_requests()` one final time to get all requests
+2. For each important API request, call `get_network_request(reqid)` to capture full details
+3. Pay special attention to: authentication headers, API endpoints, request/response bodies
+
+**There is no HAR file.** You must capture all network data you need using these tools before proceeding.
+
+### Phase 4: REVERSE ENGINEER
+Based on the network traffic you observed, generate production-ready {language_name} code:
+
+1. **Analyze the captured network data**
+   - Review all API calls you collected via list_network_requests and get_network_request
+   - Extract authentication patterns, endpoints, parameters, response structures
+
+{generation_instructions}
+
+## IMPORTANT NOTES
+
+- Think step-by-step and narrate your actions as you browse
+- Call `list_network_requests()` frequently to monitor traffic
+- Use `get_network_request(reqid)` to capture full request/response details for important API calls
+- Don't rush - ensure you capture all necessary API calls before generating code
+- After generating code, always test it to verify it works
+- **Screenshot size limit**: Screenshots must be under 1MB. Prefer `take_snapshot()` over screenshots when possible
+- You have access to the user's real browser sessions - leverage existing auth when possible
+
+## OUTPUT FILES REQUIRED
+
+{output_files}
+
+Your final response should confirm the files were created and provide a brief summary of:
+- What APIs were discovered
+- The authentication method used
+- Whether the implementation works
+- Any limitations or caveats
+"""
+
+    def _get_active_prompt(self) -> str:
+        """Return the appropriate prompt based on agent_provider."""
+        if self.agent_provider == "chrome-mcp":
+            return self._build_chrome_mcp_prompt()
+        return self._build_auto_prompt()
+
     async def _handle_tool_permission(self, tool_name: str, input_data: dict[str, Any], context: ToolPermissionContext) -> PermissionResultAllow:
         """Handle tool permission requests, with interactive UI for AskUserQuestion."""
         if tool_name == "AskUserQuestion":
@@ -234,16 +422,15 @@ Your final response should confirm the files were created and provide a brief su
         # Auto-approve all other tools
         return PermissionResultAllow(updated_input=input_data)
 
-    async def analyze_and_generate(self) -> dict[str, Any] | None:
-        """Run auto mode with MCP browser integration.
-
-        Reuses _process_streaming_response and follow-up loop from ClaudeEngineer.
-        """
-        self.ui.header(self.run_id, self.prompt, self.model, mode="agent")
-        self.ui.start_analysis()
-        self.message_store.save_prompt(self._build_auto_prompt())
-
-        mcp_config = {
+    def _get_mcp_config(self) -> tuple[str, dict]:
+        """Return (server_name, mcp_config) based on agent_provider."""
+        if self.agent_provider == "chrome-mcp":
+            return "chrome-devtools", {
+                "type": "stdio",
+                "command": "npx",
+                "args": ["chrome-devtools-mcp@latest", "--autoConnect", "--no-usage-statistics"],
+            }
+        return "playwright", {
             "type": "stdio",
             "command": "npx",
             "args": [
@@ -254,8 +441,21 @@ Your final response should confirm the files were created and provide a brief su
             ],
         }
 
+    async def analyze_and_generate(self) -> dict[str, Any] | None:
+        """Run auto mode with MCP browser integration.
+
+        Reuses _process_streaming_response and follow-up loop from ClaudeEngineer.
+        """
+        self.ui.header(self.run_id, self.prompt, self.model, mode="agent")
+        self.ui.start_analysis()
+
+        active_prompt = self._get_active_prompt()
+        self.message_store.save_prompt(active_prompt)
+
+        mcp_name, mcp_config = self._get_mcp_config()
+
         options = ClaudeAgentOptions(
-            mcp_servers={"playwright": mcp_config},
+            mcp_servers={mcp_name: mcp_config},
             permission_mode="bypassPermissions",
             can_use_tool=self._handle_tool_permission,
             cwd=str(self.scripts_dir.parent.parent),  # Project root
@@ -268,7 +468,7 @@ Your final response should confirm the files were created and provide a brief su
 
         try:
             async with ClaudeSDKClient(options=options) as client:
-                await client.query(self._build_auto_prompt())
+                await client.query(active_prompt)
 
                 # Process initial response
                 last_result = await self._process_streaming_response(client)
@@ -305,7 +505,11 @@ Your final response should confirm the files were created and provide a brief su
                     "[dim]Consider using browser_snapshot() for accessibility tree information when screenshots aren't needed.[/dim]"
                 )
             elif "MCP server" in error_msg or "npx" in error_msg:
-                self.ui.console.print("\n[dim]Make sure rae-playwright-mcp is installed: npm install -g rae-playwright-mcp[/dim]")
+                if self.agent_provider == "chrome-mcp":
+                    self.ui.console.print("\n[dim]Make sure chrome-devtools-mcp is available: npx chrome-devtools-mcp@latest[/dim]")
+                    self.ui.console.print("[dim]Chrome 146+ required with auto-connect enabled at chrome://inspect/#remote-debugging[/dim]")
+                else:
+                    self.ui.console.print("\n[dim]Make sure rae-playwright-mcp is installed: npm install -g rae-playwright-mcp[/dim]")
             else:
                 self.ui.console.print("\n[dim]Make sure Claude Code CLI is installed: npm install -g @anthropic-ai/claude-code[/dim]")
             return None
@@ -314,9 +518,8 @@ Your final response should confirm the files were created and provide a brief su
 class OpenCodeAutoEngineer(OpenCodeEngineer):
     """Auto mode using OpenCode SDK: Register MCP server dynamically."""
 
-    def __init__(self, run_id: str, prompt: str, output_dir: str | None = None, **kwargs):
+    def __init__(self, run_id: str, prompt: str, output_dir: str | None = None, agent_provider: str = "auto", **kwargs):
         """Initialize auto engineer with expected HAR path (created by MCP)."""
-        # Calculate expected HAR path - MCP will create it during execution
         har_dir = get_har_dir(run_id, output_dir)
         har_path = har_dir / "recording.har"
 
@@ -328,18 +531,55 @@ class OpenCodeAutoEngineer(OpenCodeEngineer):
             **kwargs,
         )
         self.mcp_run_id = run_id
-        self.mcp_name = None  # Will be set to unique name per session
+        self.agent_provider = agent_provider
+        self.mcp_name = None
 
     def _build_auto_prompt(self) -> str:
-        """Build autonomous browsing + engineering prompt."""
-        # Reuse the same prompt from ClaudeAutoEngineer
         return ClaudeAutoEngineer._build_auto_prompt(self)
+
+    def _get_active_prompt(self) -> str:
+        if self.agent_provider == "chrome-mcp":
+            return ClaudeAutoEngineer._build_chrome_mcp_prompt(self)
+        return self._build_auto_prompt()
+
+    def _get_opencode_mcp_config(self) -> dict:
+        """Return OpenCode MCP registration payload based on agent_provider."""
+        if self.agent_provider == "chrome-mcp":
+            self.mcp_name = f"chrome-devtools-{self._session_id}"
+            return {
+                "name": self.mcp_name,
+                "config": {
+                    "type": "local",
+                    "command": ["npx", "-y", "chrome-devtools-mcp@latest", "--autoConnect", "--no-usage-statistics"],
+                    "enabled": True,
+                    "timeout": 30000,
+                },
+            }
+        self.mcp_name = f"playwright-{self._session_id}"
+        return {
+            "name": self.mcp_name,
+            "config": {
+                "type": "local",
+                "command": [
+                    "npx",
+                    "-y",
+                    "rae-playwright-mcp@latest",
+                    "run-mcp-server",
+                    "--run-id",
+                    self.mcp_run_id,
+                ],
+                "enabled": True,
+                "timeout": 30000,
+            },
+        }
 
     async def analyze_and_generate(self) -> dict[str, Any] | None:
         """Run auto mode with OpenCode MCP integration."""
         self.opencode_ui.header(self.run_id, self.prompt, self.opencode_model, mode="agent")
         self.opencode_ui.start_analysis()
-        self.message_store.save_prompt(self._build_auto_prompt())
+
+        active_prompt = self._get_active_prompt()
+        self.message_store.save_prompt(active_prompt)
 
         try:
             auth = self._get_auth()
@@ -371,25 +611,7 @@ class OpenCodeAutoEngineer(OpenCodeEngineer):
                 self._session_id = session_data["id"]
                 self.opencode_ui.session_created(self._session_id)
 
-                # Register MCP server with unique name
-                # Format per OpenCode docs: { name, config: { type: "local", command: [...] } }
-                self.mcp_name = f"playwright-{self._session_id}"
-                mcp_config = {
-                    "name": self.mcp_name,
-                    "config": {
-                        "type": "local",
-                        "command": [
-                            "npx",
-                            "-y",
-                            "rae-playwright-mcp@latest",
-                            "run-mcp-server",
-                            "--run-id",
-                            self.mcp_run_id,
-                        ],
-                        "enabled": True,
-                        "timeout": 30000,  # 30 seconds for MCP to start
-                    },
-                }
+                mcp_config = self._get_opencode_mcp_config()
 
                 try:
                     debug_log(f"Registering MCP server: {self.mcp_name}")
@@ -406,14 +628,13 @@ class OpenCodeAutoEngineer(OpenCodeEngineer):
                 # Give event stream a moment to connect
                 await asyncio.sleep(0.1)
 
-                # Send auto prompt
                 model_id = self.MODEL_MAP.get(self.opencode_model, self.opencode_model)
                 prompt_body = {
                     "model": {
                         "providerID": self.opencode_provider,
                         "modelID": model_id,
                     },
-                    "parts": [{"type": "text", "text": self._build_auto_prompt()}],
+                    "parts": [{"type": "text", "text": active_prompt}],
                 }
 
                 prompt_r = await client.post(f"/session/{self._session_id}/message", json=prompt_body)
@@ -538,6 +759,7 @@ class CopilotAutoEngineer:
         prompt: str,
         copilot_model: str | None = None,
         output_dir: str | None = None,
+        agent_provider: str = "auto",
         **kwargs: Any,
     ):
         from .copilot_engineer import CopilotEngineer
@@ -554,6 +776,7 @@ class CopilotAutoEngineer:
             **kwargs,
         )
         self.mcp_run_id = run_id
+        self.agent_provider = agent_provider
 
     def start_sync(self) -> None:
         self._engineer.start_sync()
@@ -575,7 +798,10 @@ class CopilotAutoEngineer:
         eng.ui.header(eng.run_id, eng.prompt, eng.copilot_model, eng.sdk, mode="agent")
         eng.ui.start_analysis()
 
-        auto_prompt = ClaudeAutoEngineer._build_auto_prompt(eng)
+        if self.agent_provider == "chrome-mcp":
+            auto_prompt = ClaudeAutoEngineer._build_chrome_mcp_prompt(eng)
+        else:
+            auto_prompt = ClaudeAutoEngineer._build_auto_prompt(eng)
         eng.message_store.save_prompt(auto_prompt)
 
         done_event = asyncio.Event()
@@ -612,19 +838,30 @@ class CopilotAutoEngineer:
             )
             await client.start()
 
-            mcp_config = {
-                "type": "local",
-                "command": "npx",
-                "args": [
-                    "-y",
-                    "rae-playwright-mcp@latest",
-                    "run-mcp-server",
-                    "--run-id",
-                    self.mcp_run_id,
-                ],
-                "tools": ["*"],
-                "timeout": 30000,
-            }
+            if self.agent_provider == "chrome-mcp":
+                mcp_server_name = "chrome-devtools"
+                mcp_config = {
+                    "type": "local",
+                    "command": "npx",
+                    "args": ["-y", "chrome-devtools-mcp@latest", "--autoConnect", "--no-usage-statistics"],
+                    "tools": ["*"],
+                    "timeout": 30000,
+                }
+            else:
+                mcp_server_name = "playwright"
+                mcp_config = {
+                    "type": "local",
+                    "command": "npx",
+                    "args": [
+                        "-y",
+                        "rae-playwright-mcp@latest",
+                        "run-mcp-server",
+                        "--run-id",
+                        self.mcp_run_id,
+                    ],
+                    "tools": ["*"],
+                    "timeout": 30000,
+                }
 
             async def on_pre_tool_use(input: dict, _invocation: dict) -> dict:
                 tool_name = input.get("toolName", "unknown")
@@ -646,7 +883,7 @@ class CopilotAutoEngineer:
                     "model": eng.copilot_model,
                     "streaming": True,
                     "infinite_sessions": {"enabled": True},
-                    "mcp_servers": {"playwright": mcp_config},
+                    "mcp_servers": {mcp_server_name: mcp_config},
                     "on_permission_request": PermissionHandler.approve_all,
                     "hooks": {
                         "on_pre_tool_use": on_pre_tool_use,
