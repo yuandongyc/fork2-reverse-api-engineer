@@ -35,6 +35,7 @@ from .tui import (
 )
 from .utils import (
     check_for_updates,
+    discover_scripts,
     generate_folder_name,
     generate_run_id,
     get_actions_path,
@@ -48,6 +49,7 @@ from .utils import (
     parse_codegen_tag,
     parse_engineer_prompt,
     parse_record_only_tag,
+    resolve_run,
 )
 
 setproctitle.setproctitle("reverse-api-engineer")
@@ -2058,6 +2060,109 @@ def show_run(run_id, as_json):
 
     console.print(f"\nRun {rid}")
     console.print(table)
+
+
+@main.command("run")
+@click.argument("identifier")
+@click.argument("script_args", nargs=-1, type=click.UNPROCESSED)
+@click.option("--file", "-f", "file_name", default=None, help="Script filename to run (e.g. api_client.py).")
+@click.option("--ls", "list_scripts", is_flag=True, help="List available scripts without executing.")
+@click.pass_context
+def run_script(ctx, identifier, script_args, file_name, list_scripts):
+    """Run a generated script from a previous run.
+
+    IDENTIFIER is a run ID or search term to match against prompts.
+    Any extra arguments after the identifier are passed to the script.
+
+    Examples:
+
+        reverse-api-engineer run a450e520ca30
+
+        reverse-api-engineer run ashby --ls
+
+        reverse-api-engineer run ashby --file api_client.py
+
+        reverse-api-engineer run ashby -- --org acme --limit 10
+    """
+    import subprocess
+    import sys
+
+    from rich.table import Table
+
+    # Resolve which run
+    run = resolve_run(identifier, session_manager)
+    run_id = run["run_id"]
+    output_dir = config_manager.get("output_dir")
+
+    # Discover scripts
+    scripts = discover_scripts(run_id, output_dir)
+
+    if not scripts:
+        console.print(f"[red]No Python scripts found for run {run_id}[/red]")
+        prompt_preview = (run.get("prompt") or "")[:60]
+        console.print(f"  prompt: {prompt_preview}", style="dim")
+        raise SystemExit(1)
+
+    # --ls: just list and exit
+    if list_scripts:
+        table = Table(title=f"Scripts in run {run_id}")
+        table.add_column("File", style="cyan")
+        table.add_column("Size", justify="right")
+        table.add_column("Modified")
+        for s in scripts:
+            stat = s.stat()
+            size = f"{stat.st_size:,} B"
+            from datetime import datetime
+
+            modified = datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M")
+            table.add_row(s.name, size, modified)
+        console.print(table)
+        return
+
+    # Select script
+    if file_name:
+        # Exact filename match
+        matching = [s for s in scripts if s.name == file_name]
+        if not matching:
+            available = ", ".join(s.name for s in scripts)
+            raise click.ClickException(f"'{file_name}' not found. Available: {available}")
+        script = matching[0]
+    elif len(scripts) == 1:
+        script = scripts[0]
+    else:
+        # Interactive picker
+        choices = [questionary.Choice(title=s.name, value=s) for s in scripts]
+        script = questionary.select(
+            "Select script to run:",
+            choices=choices,
+        ).ask()
+        if script is None:
+            raise click.Abort()
+
+    # Venv / dependency management
+    scripts_dir = script.parent
+    requirements = scripts_dir / "requirements.txt"
+    venv_dir = scripts_dir / ".venv"
+
+    if requirements.exists():
+        python_path = venv_dir / "bin" / "python"
+        if not venv_dir.exists():
+            console.print("Installing dependencies...", style="dim")
+            subprocess.run([sys.executable, "-m", "venv", str(venv_dir)], check=True)
+            pip_path = venv_dir / "bin" / "pip"
+            subprocess.run(
+                [str(pip_path), "install", "-q", "-r", str(requirements)],
+                check=True,
+            )
+            console.print("Dependencies installed.", style="dim")
+        python_path = str(python_path)
+    else:
+        python_path = sys.executable
+
+    # Execute
+    console.print(f"Running [cyan]{script.name}[/cyan] from run [dim]{run_id}[/dim]")
+    result = subprocess.run([python_path, str(script), *script_args])
+    raise SystemExit(result.returncode)
 
 
 @main.command("install-host")

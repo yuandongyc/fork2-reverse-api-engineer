@@ -665,6 +665,97 @@ def get_visible_save_path(domain: str, base_dir: Path | str, suffix: int = 0) ->
     return path
 
 
+def resolve_run(identifier: str, session_manager) -> dict:
+    """Resolve a run by exact ID or fuzzy prompt/folder name match.
+
+    Args:
+        identifier: Run ID (12-char hex) or search term to fuzzy match
+        session_manager: SessionManager instance to search history
+
+    Returns:
+        The matching run dict
+
+    Raises:
+        click.ClickException: If no match or ambiguous match without TTY
+    """
+    import click
+    import questionary
+
+    # 1. Try exact run_id match
+    run = session_manager.get_run(identifier)
+    if run:
+        return run
+
+    # 2. Fuzzy match against prompt and folder names
+    identifier_lower = identifier.lower()
+    matches = []
+    for run in session_manager.history:
+        prompt = (run.get("prompt") or "").lower()
+        run_id = run.get("run_id", "")
+        # Also check the script folder name from paths
+        script_path = run.get("paths", {}).get("script_path", "")
+        folder_name = Path(script_path).parent.name if script_path else ""
+
+        if identifier_lower in prompt or identifier_lower in folder_name.lower() or identifier_lower in run_id:
+            matches.append(run)
+
+    if not matches:
+        raise click.ClickException(
+            f"No run matching '{identifier}'. Use 'reverse-api-engineer list' to see available runs."
+        )
+
+    if len(matches) == 1:
+        return matches[0]
+
+    # Multiple matches — show picker
+    choices = []
+    for m in matches:
+        prompt_preview = (m.get("prompt") or "")[:50]
+        ts = (m.get("timestamp") or "")[:19]
+        label = f"{m['run_id']}  {ts}  {prompt_preview}"
+        choices.append(questionary.Choice(title=label, value=m))
+
+    selected = questionary.select(
+        f"Multiple runs match '{identifier}':",
+        choices=choices,
+    ).ask()
+
+    if selected is None:
+        raise click.Abort()
+
+    return selected
+
+
+def discover_scripts(run_id: str, output_dir: str | None = None) -> list[Path]:
+    """Find all executable Python scripts in a run's script directory.
+
+    Args:
+        run_id: The run identifier
+        output_dir: Optional custom output directory
+
+    Returns:
+        Sorted list of .py file Paths (excludes __pycache__, .venv, __init__.py)
+    """
+    base_dir = get_base_output_dir(output_dir)
+    scripts_dir = base_dir / "scripts" / run_id
+
+    if not scripts_dir.exists():
+        return []
+
+    exclude_dirs = {"__pycache__", ".venv"}
+    exclude_files = {"__init__.py"}
+
+    scripts = []
+    for f in scripts_dir.iterdir():
+        if f.is_file() and f.suffix == ".py" and f.name not in exclude_files:
+            scripts.append(f)
+        # Don't recurse into excluded dirs
+    # Also skip files inside excluded subdirs (shouldn't happen with iterdir but defensive)
+    scripts = [s for s in scripts if not any(part in exclude_dirs for part in s.parts)]
+
+    return sorted(scripts, key=lambda p: p.name)
+
+
 def extract_domain_from_har(har_path: Path) -> str | None:
     """Extract the primary domain from a HAR file.
 
