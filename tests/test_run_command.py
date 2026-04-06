@@ -563,12 +563,11 @@ class TestRunCommandImportRetry:
         (venv / "bin" / "python").write_text("#!/bin/sh")
         (venv / "bin" / "pip").write_text("#!/bin/sh")
 
-        # 1st call: real-time run fails, 2nd: probe with captured stderr, 3rd: pip install, 4th: retry succeeds
-        first_run = MagicMock(returncode=1)
-        probe = MagicMock(returncode=1, stdout="", stderr="ModuleNotFoundError: No module named 'pandas'")
+        # 1st call: run with captured stderr fails, 2nd: pip install, 3rd: retry succeeds
+        first_run = MagicMock(returncode=1, stderr="ModuleNotFoundError: No module named 'pandas'")
         pip_ok = MagicMock(returncode=0, stdout="", stderr="")
         retry_ok = MagicMock(returncode=0)
-        with patch("subprocess.run", side_effect=[first_run, probe, pip_ok, retry_ok]):
+        with patch("subprocess.run", side_effect=[first_run, pip_ok, retry_ok]):
             with patch("questionary.confirm") as mock_confirm:
                 mock_confirm.return_value.ask.return_value = True
                 result = cli_runner.invoke(main, ["run", "def789ghi012"])
@@ -584,9 +583,8 @@ class TestRunCommandImportRetry:
         (venv / "bin" / "python").write_text("#!/bin/sh")
         (venv / "bin" / "pip").write_text("#!/bin/sh")
 
-        first_run = MagicMock(returncode=1)
-        probe = MagicMock(returncode=1, stdout="", stderr="ModuleNotFoundError: No module named 'foo'")
-        with patch("subprocess.run", side_effect=[first_run, probe]):
+        first_run = MagicMock(returncode=1, stderr="ModuleNotFoundError: No module named 'foo'")
+        with patch("subprocess.run", side_effect=[first_run]):
             with patch("questionary.confirm") as mock_confirm:
                 mock_confirm.return_value.ask.return_value = False
                 result = cli_runner.invoke(main, ["run", "def789ghi012"])
@@ -600,9 +598,8 @@ class TestRunCommandImportRetry:
         (venv / "bin").mkdir()
         (venv / "bin" / "python").write_text("#!/bin/sh")
 
-        first_run = MagicMock(returncode=1)
-        probe = MagicMock(returncode=1, stdout="", stderr="TypeError: something else broke")
-        with patch("subprocess.run", side_effect=[first_run, probe]):
+        first_run = MagicMock(returncode=1, stderr="TypeError: something else broke")
+        with patch("subprocess.run", side_effect=[first_run]):
             result = cli_runner.invoke(main, ["run", "def789ghi012"])
         assert result.exit_code == 1
 

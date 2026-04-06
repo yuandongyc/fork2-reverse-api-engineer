@@ -2165,17 +2165,19 @@ def run_script(ctx, identifier, script_args, file_name, list_scripts):
 
     python_path = str(venv_python)
 
-    # Execute with real-time output
+    # Execute with real-time stdout, capture stderr for import error detection
     cmd = [python_path, str(script), *script_args]
-    result = subprocess.run(cmd)
+    result = subprocess.run(cmd, stderr=subprocess.PIPE, text=True)
 
-    # On failure, check if it's a missing import and offer to install
+    # Print stderr so the user sees it, then check for missing imports
+    if result.stderr:
+        sys.stderr.write(result.stderr)
+
     if result.returncode != 0:
-        probe = subprocess.run(cmd, capture_output=True, text=True)
-        if "ModuleNotFoundError: No module named" in (probe.stderr or ""):
+        if "ModuleNotFoundError: No module named" in (result.stderr or ""):
             import re as _re
 
-            match = _re.search(r"No module named ['\"]([^'\"]+)['\"]", probe.stderr)
+            match = _re.search(r"No module named ['\"]([^'\"]+)['\"]", result.stderr)
             if match:
                 missing = match.group(1)
                 console.print(f"[yellow]Missing dependency: {missing}[/yellow]")
