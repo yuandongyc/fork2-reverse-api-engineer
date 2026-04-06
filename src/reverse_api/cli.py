@@ -2162,7 +2162,7 @@ def run_script(ctx, identifier, script_args, file_name, list_scripts):
     python_path = str(venv_python)
 
     # Execute (with retry on missing imports)
-    console.print(f"Running [cyan]{script.name}[/cyan] from run [dim]{run_id}[/dim]")
+    console.print(f"Running [cyan]{script.name}[/cyan] from run [dim]{run_id}[/dim]\n  [dim]{script}[/dim]")
     result = subprocess.run(
         [python_path, str(script), *script_args],
         capture_output=True, text=True,
