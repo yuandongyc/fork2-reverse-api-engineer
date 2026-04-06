@@ -101,4 +101,8 @@ chrome-extension/dist/
 chrome-extension-old
 debug/
 
+*.mp4
+*.zip
+store-assets/
+
 .playwright-mcp/
