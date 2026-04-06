@@ -2097,6 +2097,9 @@ def run_script(ctx, identifier, script_args, file_name, list_scripts):
     # Discover scripts (prefer stored path from run metadata, fall back to output_dir)
     scripts = discover_scripts(run_id, output_dir, run_metadata=run)
 
+    prompt_preview = (run.get("prompt") or "")[:80]
+    ts = (run.get("timestamp") or "")[:19]
+    console.print(f"{run_id}  {ts}  {prompt_preview}", style="dim")
     if scripts:
         console.print(f"{scripts[0].parent}", style="dim")
 
