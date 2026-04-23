@@ -106,3 +106,5 @@ debug/
 store-assets/
 
 .playwright-mcp/
+
+output/
