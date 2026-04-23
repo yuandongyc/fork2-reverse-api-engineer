@@ -1,0 +1,37 @@
+Traceback (most recent call last):
+  File "D:\MyProjects\c_projects\fork2-reverse-api-engineer\.venv\Lib\site-packages\requests\models.py", line 978, in json
+    return complexjson.loads(self.text, **kwargs)
+           ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "c:\python313\Lib\json\__init__.py", line 346, in loads
+    return _default_decoder.decode(s)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^
+  File "c:\python313\Lib\json\decoder.py", line 345, in decode
+    obj, end = self.raw_decode(s, idx=_w(s, 0).end())
+               ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "c:\python313\Lib\json\decoder.py", line 363, in raw_decode
+    raise JSONDecodeError("Expecting value", s, err.value) from None
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "D:\MyProjects\c_projects\fork2-reverse-api-engineer\src\reverse_api2\example.py", line 55, in main
+    messages = resp.json()
+  File "D:\MyProjects\c_projects\fork2-reverse-api-engineer\.venv\Lib\site-packages\requests\models.py", line 982, in json
+    raise RequestsJSONDecodeError(e.msg, e.doc, e.pos)
+requests.exceptions.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+OpenCode Python API 示例
+
+[1] 检查连接...
+  项目: D:\MyProjects\c_projects\c_yd_demos
+
+[2] 创建会话...
+  会话 ID: ses_2457330d2ffezWRalwG9jq3BF5
+
+[3] 发送消息...
+  状态码: 200
+  响应内容: '<!doctype html>\n<html lang="en" style="background-color: var(--background-base)">\n  <head>\n    <meta'
+
+[4] 等待 AI 回复...
+
+错误: Expecting value: line 1 column 1 (char 0)
